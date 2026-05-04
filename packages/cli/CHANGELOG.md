@@ -1,5 +1,13 @@
 # prisma-zod-consistency
 
+## 0.1.2
+
+### Patch Changes
+
+- Republish 0.1.1 under a new version. The 0.1.1 tarball was published with an empty dist/ (build step was skipped), then unpublished — but npm bans reusing a burned version name, so the same content ships as 0.1.2. No code changes vs. 0.1.1; full polish-for-launch fixes are included (see 0.1.1 entry below for the complete list).
+
+
+
 ## 0.1.1
 
 ### Patch Changes
