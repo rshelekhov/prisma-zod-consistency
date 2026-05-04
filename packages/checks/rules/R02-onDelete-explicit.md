@@ -66,7 +66,7 @@ model Conversation {
 {
   "R02": {
     "severity": "warning",
-    "requireOnUpdate": true,             // set to false to only require onDelete
+    "requireOnUpdate": false,            // default; set to true if your team wants onUpdate explicit too
     "ignoreModels": ["AuditLog"],
     "ignoreRelations": [                  // skip specific relations by "Model.field"
       "User.organization"
@@ -74,6 +74,8 @@ model Conversation {
   }
 }
 ```
+
+Defaults explained: `onDelete` is required because cascade-on-delete is a data-loss-class decision. `onUpdate` is opt-in because mutating primary keys is exotic — most projects never do it, so requiring it produces noise on codebases that are otherwise diligent about `onDelete`.
 
 ## See also
 

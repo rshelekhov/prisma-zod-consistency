@@ -24,7 +24,10 @@ export const r02: Rule = {
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {
     const config = options.config as R02Config;
-    const requireOnUpdate = config.requireOnUpdate ?? true;
+    // Default: only require onDelete. onUpdate-on-relation is exotic
+    // (most projects never mutate PKs), so requiring it produces noise on
+    // codebases that are otherwise diligent about onDelete. Opt-in.
+    const requireOnUpdate = config.requireOnUpdate ?? false;
     const ignoreModels = new Set(config.ignoreModels ?? []);
     const ignoreRelations = new Set(config.ignoreRelations ?? []);
 
