@@ -72,7 +72,7 @@ describe("R09 — schema drift vs DB", () => {
       User: { id: { type: "String" }, email: { type: "String" } },
     });
     const dbColumns: DbColumn[] = [
-      col({ tableName: "user", columnName: "id", isNullable: false }),
+      col({ tableName: "User", columnName: "id", isNullable: false }),
     ];
     const findings = diffPrismaVsDb(registry, dbColumns, opts());
     expect(
@@ -85,8 +85,8 @@ describe("R09 — schema drift vs DB", () => {
       User: { id: { type: "String" } },
     });
     const dbColumns: DbColumn[] = [
-      col({ tableName: "user", columnName: "id", isNullable: false }),
-      col({ tableName: "user", columnName: "legacy_flag", isNullable: true }),
+      col({ tableName: "User", columnName: "id", isNullable: false }),
+      col({ tableName: "User", columnName: "legacy_flag", isNullable: true }),
     ];
     const findings = diffPrismaVsDb(registry, dbColumns, opts());
     expect(
@@ -94,13 +94,26 @@ describe("R09 — schema drift vs DB", () => {
     ).toBe(true);
   });
 
+  it("uses @@map(...) tableName when matching the DB", () => {
+    const registry = makeRegistry(
+      { User: { id: { type: "String" }, email: { type: "String" } } },
+      { User: "users" }, // simulates `@@map("users")`
+    );
+    const dbColumns: DbColumn[] = [
+      col({ tableName: "users", columnName: "id", isNullable: false }),
+      col({ tableName: "users", columnName: "email", isNullable: false }),
+    ];
+    const findings = diffPrismaVsDb(registry, dbColumns, opts());
+    expect(findings).toEqual([]);
+  });
+
   it("flags nullability drift", () => {
     const registry = makeRegistry({
       User: { id: { type: "String" }, name: { type: "String", isOptional: true } },
     });
     const dbColumns: DbColumn[] = [
-      col({ tableName: "user", columnName: "id", isNullable: false }),
-      col({ tableName: "user", columnName: "name", isNullable: false }),
+      col({ tableName: "User", columnName: "id", isNullable: false }),
+      col({ tableName: "User", columnName: "name", isNullable: false }),
     ];
     const findings = diffPrismaVsDb(registry, dbColumns, opts());
     expect(
@@ -153,11 +166,15 @@ function opts() {
   return { severity: "info" as const, config: {} };
 }
 
-function makeRegistry(spec: Record<string, Record<string, { type: string; isOptional?: boolean }>>): PrismaModelRegistry {
+function makeRegistry(
+  spec: Record<string, Record<string, { type: string; isOptional?: boolean }>>,
+  tableNames: Record<string, string> = {},
+): PrismaModelRegistry {
   const models = new Map();
   for (const [modelName, fields] of Object.entries(spec)) {
     models.set(modelName, {
       name: modelName,
+      tableName: tableNames[modelName] ?? modelName,
       fields: Object.entries(fields).map(([fname, info]) => ({
         name: fname,
         type: info.type,

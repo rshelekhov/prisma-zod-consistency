@@ -25,7 +25,6 @@ import type { DbColumn } from "../db/types.js";
 import {
   loadPrismaRegistry,
   type FieldInfo,
-  type ModelInfo,
   type PrismaModelRegistry,
 } from "../schema/prisma-models.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
@@ -66,7 +65,7 @@ export function diffPrismaVsDb(
   const findings: Finding[] = [];
 
   for (const model of registry.models.values()) {
-    const tableName = resolveTableName(model);
+    const tableName = model.tableName;
     if (ignoreTables.has(tableName)) continue;
 
     const dbColsForTable = dbByTable.get(tableName);
@@ -136,13 +135,6 @@ export function diffPrismaVsDb(
   return findings;
 }
 
-function resolveTableName(model: ModelInfo): string {
-  // Look for @@map("table_name") in any block-level attribute. Our current
-  // PrismaModelRegistry doesn't expose block attributes yet, so fall back to
-  // snake_case conversion of the model name. TODO: surface @@map.
-  return toSnakeCase(model.name);
-}
-
 function resolveColumnName(field: FieldInfo): string {
   // @map("column_name") on the field maps to a different DB column name.
   for (const attr of field.attributes) {
@@ -157,11 +149,4 @@ function resolveColumnName(field: FieldInfo): string {
 function isRelationField(field: FieldInfo, registry: PrismaModelRegistry): boolean {
   if (registry.models.has(field.type)) return true;
   return field.attributes.some((attr) => attr.name === "relation");
-}
-
-function toSnakeCase(name: string): string {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
-    .toLowerCase();
 }

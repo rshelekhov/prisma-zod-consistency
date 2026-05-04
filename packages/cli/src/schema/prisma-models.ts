@@ -13,6 +13,8 @@ import { getSchema } from "@mrleebo/prisma-ast";
 
 export interface ModelInfo {
   name: string;
+  /** Physical table name. Honors `@@map("...")`; falls back to the model name as written (no snake_case implied — Prisma's default is the model name unchanged). */
+  tableName: string;
   fields: FieldInfo[];
 }
 
@@ -87,11 +89,37 @@ export function parsePrismaRegistry(source: string): PrismaModelRegistry {
 
 function toModelInfo(block: { name: string; properties: unknown[] }): ModelInfo {
   const fields: FieldInfo[] = [];
+  let tableName = block.name; // Prisma default — table name == model name as written.
+
   for (const property of block.properties) {
-    if (!isFieldProperty(property)) continue;
-    fields.push(toFieldInfo(property));
+    if (isFieldProperty(property)) {
+      fields.push(toFieldInfo(property));
+      continue;
+    }
+    if (isBlockAttribute(property)) {
+      const mapped = readMapAttribute(property);
+      if (mapped) tableName = mapped;
+    }
   }
-  return { name: block.name, fields };
+  return { name: block.name, tableName, fields };
+}
+
+function readMapAttribute(attr: { name: string; args?: unknown[] }): string | undefined {
+  if (attr.name !== "map") return undefined;
+  for (const raw of attr.args ?? []) {
+    if (!isObject(raw)) continue;
+    const value = (raw as { value?: unknown }).value;
+    if (typeof value === "string") return stripQuotes(value);
+  }
+  return undefined;
+}
+
+function isBlockAttribute(prop: unknown): prop is { type: "attribute"; name: string; args?: unknown[] } {
+  return (
+    isObject(prop) &&
+    (prop as { type?: unknown }).type === "attribute" &&
+    typeof (prop as { name?: unknown }).name === "string"
+  );
 }
 
 function toFieldInfo(prop: {
