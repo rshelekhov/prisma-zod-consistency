@@ -89,7 +89,7 @@ Defaults explained: `onDelete` is required because cascade-on-delete is a data-l
 
 ## Implementation notes
 
-- **Source location.** Findings currently report `prisma/schema.prisma:1` regardless of the actual line because `@mrleebo/prisma-ast` doesn't surface attribute source ranges by default. The model and field name in the message identify the relation precisely; line number fidelity is a planned improvement.
+- **Source location.** `@mrleebo/prisma-ast` does not surface source ranges on attribute nodes, so the rule falls back to a token scan: it parses model line ranges directly from the source text and locates the field declaration line by name. Findings now point at the correct `field @relation(...)` line; if the scan fails for any reason (highly unusual), the rule defaults to line 1 rather than crashing.
 - **Polymorphic relations / explicit join models** are flagged like any other relation. Usually you want explicit `onDelete` on those too, so this is the right behavior.
 
 ## See also

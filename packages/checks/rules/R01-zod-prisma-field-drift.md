@@ -121,6 +121,7 @@ export const createUserInputSchema = UserSchema.pick({
 
 - **Only R01a is implemented today.** R01b and R01c require detecting which symbols are exported from the Zod-generator output dir and checking that custom schemas reference them. Discovery already detects the Zod mode; the comparison logic for hybrid mode lands in a follow-up.
 - **Source location.** Field-level findings point at the Zod field's line. The `@db.*` constraint side is reported as "from Prisma" in the message but does not link to a `schema.prisma` line — `@mrleebo/prisma-ast` doesn't expose source positions on attributes by default.
+- **Codemod insertion order.** When the Zod chain already contains a `.nullable()` / `.optional()` / `.nullish()` modifier, `pz-fix` inserts new constraints (`.int()`, `.max(N)`) **before** that modifier, producing `z.number().int().nullable()` rather than `z.number().nullable().int()`. The semantic outcome is the same in current Zod, but the canonical order keeps the value-shape constraints adjacent to the base type.
 - **Array element types.** When a Prisma field is `String[]` and the Zod schema is `z.array(...)`, the rule confirms shape compatibility but does NOT recurse into the inner element type. So `String[] ↔ z.array(z.number())` would slip through. Tracked.
 - **Enum-typed Prisma fields.** Skipped here, handled by R03.
 - **Nullability.** Skipped here, handled by R04.

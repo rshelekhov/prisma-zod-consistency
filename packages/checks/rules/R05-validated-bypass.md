@@ -143,7 +143,7 @@ The presence of `from "@hono/zod-validator"` in the file's imports tells R05 thi
 
 - **Hono only.** Other frameworks (tRPC, Next.js Route Handlers, Express, Fastify, NestJS) need their own detectors keyed off `framework: "trpc" | "next" | "express" | "fastify" | "nest"`. They use different bypass shapes (e.g. tRPC: a procedure with no `.input(...)` accepting an untyped body; Express: `req.body` direct usage; NestJS: a controller method with no DTO + ValidationPipe). Each is one focused walker.
 - **Wrapper detection is heuristic.** "Imports from `@hono/zod-validator`" catches the standard wrapper pattern but a project that hand-rolls validation without importing zod-validator wouldn't be auto-skipped. Add to `excludeFiles` or refactor to use the standard import.
-- **Source location is exact** — unlike R02, this rule walks the TS AST and gets the actual line of the bypass call. No `:1` placeholder.
+- **Source location is exact** — the rule walks the TS AST via `ts-morph` and gets the actual line of the bypass call directly from the source position.
 
 ## See also
 
