@@ -1,0 +1,85 @@
+/**
+ * Public types shared across the CLI: rule definitions, findings, and runtime context.
+ *
+ * Stability: pre-1.0, may break between minor versions.
+ */
+
+export type Severity = "error" | "warning" | "info";
+
+export type RuleId =
+  | "R01"
+  | "R02"
+  | "R03"
+  | "R04"
+  | "R05"
+  | "R06"
+  | "R07"
+  | "R08"
+  | "R09"
+  | "R10"
+  | "R11";
+
+/** Where in the user's source a finding originates. */
+export interface SourceLocation {
+  /** Absolute or project-relative file path. */
+  file: string;
+  /** 1-based line number. */
+  line: number;
+  /** 1-based column number; optional. */
+  column?: number;
+}
+
+/** A single rule violation. */
+export interface Finding {
+  ruleId: RuleId;
+  severity: Severity;
+  /** Short, single-sentence description of what was found. */
+  message: string;
+  location: SourceLocation;
+  /** Optional human-readable suggestion for how to fix. */
+  suggestion?: string;
+  /** Optional model/field/relation context for grouping in the report. */
+  scope?: {
+    model?: string;
+    field?: string;
+    relation?: string;
+  };
+}
+
+/** What the project looks like — populated by the discovery phase. */
+export interface ProjectContext {
+  /** Absolute path to the project root (where `.prismazodrc` or `package.json` lives). */
+  rootDir: string;
+  /** Absolute path to `schema.prisma`. */
+  schemaPath: string;
+  /** Datasource provider as declared in `schema.prisma`. */
+  provider: "postgresql" | "mysql" | "sqlite" | "sqlserver" | "mongodb" | "cockroachdb";
+  /** TS/JS files we should scan. */
+  sourceFiles: string[];
+  /** Detected Zod-generation mode (drives R01). */
+  zodMode: ZodMode;
+}
+
+export type ZodMode =
+  | { kind: "hand-written" }
+  | { kind: "generated"; generator: KnownZodGenerator; outputDir: string }
+  | { kind: "hybrid"; generator: KnownZodGenerator; outputDir: string };
+
+export type KnownZodGenerator =
+  | "zod-prisma-types"
+  | "prisma-zod-generator"
+  | "zod-prisma";
+
+/** A rule implementation. */
+export interface Rule {
+  id: RuleId;
+  defaultSeverity: Severity;
+  /** Run the rule against the project context. May return zero or more findings. */
+  run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]>;
+}
+
+export interface RuleOptions {
+  severity: Severity;
+  /** Rule-specific config bag, opaque at the framework level. */
+  config: Record<string, unknown>;
+}

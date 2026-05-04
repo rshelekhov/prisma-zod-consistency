@@ -1,0 +1,17 @@
+{
+  "name": "@prisma-zod-consistency/skill-claude-code",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Claude Code skill bundle for prisma-zod-consistency.",
+  "license": "MIT",
+  "files": [
+    "SKILL.md",
+    "plugin.json"
+  ],
+  "scripts": {
+    "build": "echo 'no build (markdown bundle)'",
+    "lint": "echo 'no lint (markdown bundle)'",
+    "test": "echo 'no test (markdown bundle)'",
+    "typecheck": "echo 'no typecheck (markdown bundle)'"
+  }
+}

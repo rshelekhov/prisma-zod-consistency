@@ -1,0 +1,13 @@
+{
+  "name": "prisma-zod-consistency",
+  "version": "0.0.0",
+  "description": "Audit Prisma + Zod + TypeScript projects for cross-layer drift. Reports findings with file:line, severity, and a suggested fix.",
+  "author": {
+    "name": "Roman Shelekhov",
+    "url": "https://github.com/rshelekhov"
+  },
+  "homepage": "https://github.com/rshelekhov/prisma-zod-consistency",
+  "repository": "https://github.com/rshelekhov/prisma-zod-consistency",
+  "license": "MIT",
+  "keywords": ["prisma", "zod", "typescript", "consistency", "audit"]
+}

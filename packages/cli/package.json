@@ -1,0 +1,61 @@
+{
+  "name": "@prisma-zod-consistency/cli",
+  "version": "0.0.0",
+  "description": "CLI for prisma-zod-consistency — deterministic static analysis for Prisma + Zod + TypeScript projects.",
+  "license": "MIT",
+  "author": "Roman Shelekhov",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rshelekhov/prisma-zod-consistency.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/rshelekhov/prisma-zod-consistency/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/rshelekhov/prisma-zod-consistency/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "pz-check": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "echo 'lint placeholder — wire up Biome in next iteration'",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mrleebo/prisma-ast": "^0.12.0",
+    "commander": "^12.1.0",
+    "cosmiconfig": "^9.0.0",
+    "picocolors": "^1.1.1",
+    "ts-morph": "^24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "prisma",
+    "zod",
+    "consistency",
+    "lint",
+    "static-analysis",
+    "database",
+    "schema"
+  ]
+}

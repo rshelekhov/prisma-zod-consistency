@@ -1,0 +1,23 @@
+// Bad fixture for R02: @relation without explicit onDelete/onUpdate.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  conversations Conversation[]
+}
+
+model Conversation {
+  id        String  @id @default(cuid())
+  userId    String
+  // ❌ no onDelete, no onUpdate — runtime behavior depends on Prisma defaults.
+  user      User    @relation(fields: [userId], references: [id])
+  title     String
+}
