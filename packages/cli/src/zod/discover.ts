@@ -54,6 +54,13 @@ export interface ZodField {
   baseType: string;
   /** Method chain calls applied after the base type, in source order. */
   chain: ZodChainCall[];
+  /** Inline enum literals when baseType is "enum" (e.g. z.enum(["A","B"])). */
+  enumValues?: string[];
+  /**
+   * Identifier referenced when baseType is "nativeEnum"
+   * (e.g. "BookingStatus" for z.nativeEnum(BookingStatus) or z.nativeEnum(prisma.BookingStatus)).
+   */
+  nativeEnumName?: string;
 }
 
 export interface ZodChainCall {
@@ -189,16 +196,47 @@ function extractObjectFields(obj: ObjectLiteralExpression): ZodField[] {
 
     const baseType = chainBaseType(head, chain);
     const trailing = chain.slice(baseTypePrefixLength(chain));
+    const baseStep = chain[baseTypePrefixLength(chain) - 1] ?? head;
+    const enumExtras = extractEnumExtras(baseType, baseStep);
 
     result.push({
       name,
       line: lineOf(prop),
       baseType,
       chain: trailing.map((c) => ({ name: c.method, args: c.argTexts })),
+      ...enumExtras,
     });
   }
 
   return result;
+}
+
+function extractEnumExtras(
+  baseType: string,
+  step: ChainStep,
+): Pick<ZodField, "enumValues" | "nativeEnumName"> {
+  if (baseType === "enum") {
+    const arrayNode = step.argNodes[0];
+    if (arrayNode && Node.isArrayLiteralExpression(arrayNode)) {
+      const values: string[] = [];
+      for (const el of arrayNode.getElements()) {
+        if (Node.isStringLiteral(el) || Node.isNoSubstitutionTemplateLiteral(el)) {
+          values.push(el.getLiteralText());
+        }
+      }
+      return { enumValues: values };
+    }
+  }
+  if (baseType === "nativeEnum") {
+    const ref = step.argNodes[0];
+    if (ref && Node.isIdentifier(ref)) {
+      return { nativeEnumName: ref.getText() };
+    }
+    if (ref && Node.isPropertyAccessExpression(ref)) {
+      return { nativeEnumName: ref.getName() };
+    }
+  }
+  return {};
 }
 
 interface ChainStep {

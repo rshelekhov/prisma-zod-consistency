@@ -1,0 +1,33 @@
+// Good fixture for R03: enums in sync.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BookingStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  CLIENT
+}
+
+model Booking {
+  id     String        @id @default(cuid())
+  status BookingStatus @default(DRAFT)
+}
+
+model User {
+  id   String   @id @default(cuid())
+  role UserRole @default(CLIENT)
+}
