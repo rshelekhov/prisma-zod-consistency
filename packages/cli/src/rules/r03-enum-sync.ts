@@ -20,6 +20,7 @@
  * See: packages/checks/rules/R03-enum-sync.md
  */
 
+import { readFile } from "node:fs/promises";
 import {
   loadPrismaRegistry,
   type PrismaModelRegistry,
@@ -30,7 +31,7 @@ import {
   type ZodSchemaInfo,
 } from "../zod/discover.js";
 import { matchSchemasToModels } from "../zod/match.js";
-import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
+import type { Fix, Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
 interface R03Config {
   ignoreEnums?: string[];
@@ -62,11 +63,19 @@ export const r03: Rule = {
 
     // Pass 2: enum-typed fields inside object schemas.
     const objectMatches = matchSchemasToModels(zodSchemas, registry);
+    const sourceCache = new Map<string, string>();
+
     for (const match of objectMatches) {
       const model = registry.models.get(match.modelName);
       if (!model) continue;
       if (match.zod.shape.kind !== "object") continue;
       const zodByName = new Map(match.zod.shape.fields.map((f) => [f.name, f]));
+
+      let source: string | undefined = sourceCache.get(match.zod.file);
+      if (source === undefined) {
+        source = await readFile(match.zod.file, "utf8");
+        sourceCache.set(match.zod.file, source);
+      }
 
       for (const prismaField of model.fields) {
         if (!registry.enums.has(prismaField.type)) continue;
@@ -78,9 +87,10 @@ export const r03: Rule = {
             zodField,
             prismaField.type,
             match.zod,
-            registry,
+            source,
             options,
             preferNativeEnum,
+            registry,
           ),
         );
       }
@@ -151,12 +161,12 @@ function checkFieldEnumDrift(
   zodField: ZodField,
   prismaEnumName: string,
   schema: ZodSchemaInfo,
-  registry: PrismaModelRegistry,
+  source: string,
   options: RuleOptions,
   preferNativeEnum: boolean,
+  registry: PrismaModelRegistry,
 ): Finding[] {
   const prismaValues = registry.enums.get(prismaEnumName) ?? [];
-
   if (zodField.baseType !== "enum" && zodField.baseType !== "nativeEnum") {
     return [
       {
@@ -166,6 +176,7 @@ function checkFieldEnumDrift(
         location: { file: schema.file, line: zodField.line },
         suggestion: `Use \`z.nativeEnum(${prismaEnumName})\` to mirror the Prisma enum.`,
         scope: { model: schema.name, field: zodField.name },
+        fix: buildBaseToNativeEnumFix(zodField, schema.file, prismaEnumName, source),
       },
     ];
   }
@@ -209,7 +220,6 @@ function checkFieldEnumDrift(
   }
 
   return findings;
-  void registry;
 }
 
 function diffEnumValues(
@@ -254,6 +264,64 @@ function diffEnumValues(
       scope: { model: zodName },
     },
   ];
+}
+
+/**
+ * Build a fix that replaces a non-enum base call (e.g. `z.string()`) with
+ * `z.nativeEnum(EnumName)`, optionally adding the import if it's not
+ * already in scope.
+ */
+function buildBaseToNativeEnumFix(
+  zodField: ZodField,
+  file: string,
+  prismaEnumName: string,
+  source: string,
+): Fix {
+  const replaceBase = {
+    file,
+    start: zodField.exprStart,
+    end: zodField.baseEnd,
+    newText: `z.nativeEnum(${prismaEnumName})`,
+  };
+
+  const edits = [replaceBase];
+
+  if (!enumIsInScope(source, prismaEnumName)) {
+    edits.push({
+      file,
+      start: 0,
+      end: 0,
+      newText: `import { ${prismaEnumName} } from "@prisma/client";\n`,
+    });
+  }
+
+  return {
+    description: `Replace z.${zodField.baseType}() with z.nativeEnum(${prismaEnumName})`,
+    edits,
+  };
+}
+
+/**
+ * Heuristic: is the symbol `name` already brought into scope by an import
+ * statement in this file? Scans the first ~80 lines for any import that
+ * names the symbol. Handles `import { X }`, `import { X as Y }`, and
+ * `import { Y as X }` correctly enough for the common case.
+ */
+function enumIsInScope(source: string, name: string): boolean {
+  const head = source.split("\n").slice(0, 80).join("\n");
+  // Look for { ... name ... } in any import declaration.
+  const importRegex = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["'][^"']+["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = importRegex.exec(head)) !== null) {
+    const namedImports = match[1] ?? "";
+    const symbols = namedImports.split(",").map((s) => {
+      // Handle "X as Y" — the local binding is Y.
+      const parts = s.trim().split(/\s+as\s+/);
+      return (parts[1] ?? parts[0] ?? "").trim();
+    });
+    if (symbols.includes(name)) return true;
+  }
+  return false;
 }
 
 const ENUM_AFFIXES = ["Schema", "Enum"];

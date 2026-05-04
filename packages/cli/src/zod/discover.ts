@@ -61,6 +61,16 @@ export interface ZodField {
    * (e.g. "BookingStatus" for z.nativeEnum(BookingStatus) or z.nativeEnum(prisma.BookingStatus)).
    */
   nativeEnumName?: string;
+  /** Character offset (start, inclusive) of the entire field value expression. Used for codemods. */
+  exprStart: number;
+  /** Character offset (end, exclusive) of the entire field value expression. Used for codemods. */
+  exprEnd: number;
+  /**
+   * Character offset (end, exclusive) of just the base call (`z.string()`,
+   * `z.number()`, etc.) before any chained methods. Used by codemods that
+   * replace only the base type, e.g. `z.string()` -> `z.nativeEnum(X)`.
+   */
+  baseEnd: number;
 }
 
 export interface ZodChainCall {
@@ -68,6 +78,8 @@ export interface ZodChainCall {
   name: string;
   /** Argument list as raw source snippets — sufficient for set/numeric checks. */
   args: string[];
+  /** Character offsets of each arg (parallel to `args`). Used for codemods that rewrite a single argument. */
+  argRanges?: Array<{ start: number; end: number }>;
 }
 
 export async function discoverZodSchemas(
@@ -199,16 +211,43 @@ function extractObjectFields(obj: ObjectLiteralExpression): ZodField[] {
     const baseStep = chain[baseTypePrefixLength(chain) - 1] ?? head;
     const enumExtras = extractEnumExtras(baseType, baseStep);
 
+    const baseCall = findBaseCall(initializer);
     result.push({
       name,
       line: lineOf(prop),
       baseType,
-      chain: trailing.map((c) => ({ name: c.method, args: c.argTexts })),
+      chain: trailing.map((c) => ({
+        name: c.method,
+        args: c.argTexts,
+        argRanges: c.argNodes.map((node) => ({ start: node.getStart(), end: node.getEnd() })),
+      })),
       ...enumExtras,
+      exprStart: initializer.getStart(),
+      exprEnd: initializer.getEnd(),
+      baseEnd: baseCall.getEnd(),
     });
   }
 
   return result;
+}
+
+function findBaseCall(initializer: CallExpression): CallExpression {
+  let cursor: Node = initializer;
+  while (true) {
+    if (Node.isCallExpression(cursor)) {
+      const call = cursor as CallExpression;
+      const expr = call.getExpression();
+      if (Node.isPropertyAccessExpression(expr)) {
+        const inner = (expr as PropertyAccessExpression).getExpression();
+        if (Node.isCallExpression(inner)) {
+          cursor = inner;
+          continue;
+        }
+      }
+      return call;
+    }
+    return initializer;
+  }
 }
 
 function extractEnumExtras(

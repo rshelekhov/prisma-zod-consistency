@@ -33,6 +33,24 @@ pz-check
 pz-check --rules R01,R02,R03
 ```
 
+## Auto-fix
+
+A subset of findings ship a mechanical, safe codemod that `pz-fix` can apply:
+
+- **R01**: missing `.max(N)` (appends to chain), missing `.int()` on `Int` fields, looser `.max(M)` (rewrites to match Prisma).
+- **R03**: field-level `z.string()` / `z.number()` where Prisma is an enum → `z.nativeEnum(EnumName)` plus an auto-import from `@prisma/client` if the enum isn't already in scope.
+
+```bash
+prisma-zod-consistency fix                 # dry-run: prints a diff, exits 0
+prisma-zod-consistency fix --apply         # writes changes to disk
+prisma-zod-consistency fix --rules R01     # restrict to one rule
+```
+
+What is **not** auto-fixed (deliberately):
+- Schema-side changes (`schema.prisma` is never touched — those imply migrations).
+- R03 enum value mismatches (removing a value from `z.enum([...])` could break compile-time references elsewhere).
+- R02, R04, R05 (no safe mechanical fix — the right action is contextual).
+
 ## Configuration
 
 Create a `.prismazodrc.json` (or `.prismazodrc.js`, or a `prisma-zod-consistency` field in `package.json`):

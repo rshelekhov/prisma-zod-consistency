@@ -38,12 +38,34 @@ export interface Finding {
   location: SourceLocation;
   /** Optional human-readable suggestion for how to fix. */
   suggestion?: string;
+  /** Optional mechanical fix. Present only for findings that pz-fix can apply safely. */
+  fix?: Fix;
   /** Optional model/field/relation context for grouping in the report. */
   scope?: {
     model?: string;
     field?: string;
     relation?: string;
   };
+}
+
+/** A safe, automatically-applicable change tied to a finding. */
+export interface Fix {
+  /** Human-readable description (e.g. "Add .max(255) to email"). */
+  description: string;
+  /** One or more atomic edits, ALL of which must apply for the fix to be valid. */
+  edits: FileEdit[];
+}
+
+/** A single text-range replacement in a file. */
+export interface FileEdit {
+  /** Absolute file path. */
+  file: string;
+  /** 0-based character offset in the file (inclusive). */
+  start: number;
+  /** 0-based character offset in the file (exclusive). For pure insertions, set start === end. */
+  end: number;
+  /** Replacement text. May be empty (deletion). */
+  newText: string;
 }
 
 /** What the project looks like — populated by the discovery phase. */

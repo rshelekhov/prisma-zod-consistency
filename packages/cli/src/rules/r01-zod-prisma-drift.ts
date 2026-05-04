@@ -131,6 +131,17 @@ function checkTypeCompatibility(
         message: `Field \`${prismaField.name}\` is \`Int\` in Prisma but the Zod schema in \`${zod.name}\` uses \`z.number()\` without \`.int()\`.`,
         location: { file: zod.file, line: zodField.line },
         suggestion: `Add \`.int()\` to the chain so non-integer numerics are rejected.`,
+        fix: {
+          description: `Append .int() to ${zod.name}.${prismaField.name}`,
+          edits: [
+            {
+              file: zod.file,
+              start: zodField.exprEnd,
+              end: zodField.exprEnd,
+              newText: ".int()",
+            },
+          ],
+        },
         scope: { model: matchedModelName(zod), field: prismaField.name },
       },
     ];
@@ -156,14 +167,41 @@ function checkVarcharMax(
         ruleId: "R01",
         severity: options.severity,
         message: `Field \`${prismaField.name}\` is \`@db.${dbKind}(${dbSize})\` in Prisma; \`${zod.name}\` has no \`.max()\` to enforce that limit.`,
-        location: { file: zodField.line ? zod.file : zod.file, line: zodField.line },
+        location: { file: zod.file, line: zodField.line },
         suggestion: `Add \`.max(${dbSize})\` to \`${zodField.name}\`.`,
+        fix: {
+          description: `Append .max(${dbSize}) to ${zod.name}.${prismaField.name}`,
+          edits: [
+            {
+              file: zod.file,
+              start: zodField.exprEnd,
+              end: zodField.exprEnd,
+              newText: `.max(${dbSize})`,
+            },
+          ],
+        },
         scope: { model: matchedModelName(zod), field: prismaField.name },
       },
     ];
   }
 
   if (zodMax > dbSize) {
+    const maxArgRange = findMaxArgRange(zodField);
+    const fixObj = maxArgRange
+      ? {
+          fix: {
+            description: `Lower .max(${zodMax}) to .max(${dbSize}) on ${zod.name}.${prismaField.name}`,
+            edits: [
+              {
+                file: zod.file,
+                start: maxArgRange.start,
+                end: maxArgRange.end,
+                newText: String(dbSize),
+              },
+            ],
+          },
+        }
+      : {};
     return [
       {
         ruleId: "R01",
@@ -171,12 +209,19 @@ function checkVarcharMax(
         message: `Field \`${prismaField.name}\` allows \`.max(${zodMax})\` in Zod but the database is \`@db.${dbKind}(${dbSize})\`.`,
         location: { file: zod.file, line: zodField.line },
         suggestion: `Lower the Zod \`.max()\` to \`${dbSize}\` (or relax the Prisma column).`,
+        ...fixObj,
         scope: { model: matchedModelName(zod), field: prismaField.name },
       },
     ];
   }
 
   return [];
+}
+
+function findMaxArgRange(zodField: ZodField): { start: number; end: number } | undefined {
+  const max = zodField.chain.find((c) => c.name === "max");
+  if (!max) return undefined;
+  return max.argRanges?.[0];
 }
 
 function expectedZodBaseTypes(prismaType: string): string[] {
