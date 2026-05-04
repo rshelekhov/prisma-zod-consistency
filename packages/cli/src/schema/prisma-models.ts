@@ -173,7 +173,12 @@ function toAttributeArg(raw: unknown): AttributeArg {
 }
 
 function toArgPayload(value: unknown): AttributeArg {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (typeof value === "string") {
+    // prisma-ast preserves the quote marks around string literals; strip them
+    // so consumers get the actual value (e.g. `column_name` not `"column_name"`).
+    return { kind: "literal", value: stripQuotes(value) };
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
     return { kind: "literal", value };
   }
   if (Array.isArray(value)) {
