@@ -1,0 +1,17 @@
+// Bad fixture for R04: two nullability mismatches in opposite directions.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id    String  @id @default(cuid())
+  email String                       // required in Prisma
+  name  String?                      // optional in Prisma
+  bio   String?                      // optional in Prisma
+}

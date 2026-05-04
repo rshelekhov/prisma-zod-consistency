@@ -1,0 +1,17 @@
+// Good fixture for R04: nullability matches Prisma exactly.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id    String  @id @default(cuid())
+  email String
+  name  String?
+  bio   String?
+}
