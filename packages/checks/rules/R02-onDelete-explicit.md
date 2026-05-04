@@ -1,9 +1,13 @@
 # R02 — `@relation` without explicit `onDelete`/`onUpdate`
 
-**Severity (default):** warning
-**Phase:** 1 (skill), 2 (CLI)
-**Surface:** both
-**Group:** A (static)
+| Field | Value |
+|---|---|
+| Severity (default) | warning |
+| Phase | 1 (skill), 2 (CLI) |
+| Surface | CLI + skill |
+| Group | A (static) |
+| Auto-fix | no — the right action depends on data-model intent |
+| Implementation | done |
 
 ## What it checks
 
@@ -76,6 +80,17 @@ model Conversation {
 ```
 
 Defaults explained: `onDelete` is required because cascade-on-delete is a data-loss-class decision. `onUpdate` is opt-in because mutating primary keys is exotic — most projects never do it, so requiring it produces noise on codebases that are otherwise diligent about `onDelete`.
+
+## Common false positives
+
+- **None in well-tuned config.** With the defaults (`requireOnUpdate: false`), this rule fires only when `onDelete` is genuinely absent, which is always worth a moment of consideration even if the answer is "Restrict". The smoke run on llc_backoffice produced 3 findings, all real.
+- **With `requireOnUpdate: true`, expect noise on PK-immutable codebases.** If your team never updates primary keys (the common case), every `@relation` looks "missing onUpdate" — that's noise, not a bug. Keep the default off.
+- **Inverse relation side (the one without `fields:`)** never gets flagged because referential actions only live on the FK-owning side. The rule correctly excludes those.
+
+## Implementation notes
+
+- **Source location.** Findings currently report `prisma/schema.prisma:1` regardless of the actual line because `@mrleebo/prisma-ast` doesn't surface attribute source ranges by default. The model and field name in the message identify the relation precisely; line number fidelity is a planned improvement.
+- **Polymorphic relations / explicit join models** are flagged like any other relation. Usually you want explicit `onDelete` on those too, so this is the right behavior.
 
 ## See also
 

@@ -1,9 +1,13 @@
 # R01 — Zod ↔ Prisma field drift
 
-**Severity (default):** error
-**Phase:** 1 (skill), 2 (CLI subset)
-**Surface:** both
-**Group:** A (static)
+| Field | Value |
+|---|---|
+| Severity (default) | error |
+| Phase | 1 (skill), 2 (CLI subset) |
+| Surface | CLI + skill |
+| Group | A (static) |
+| Auto-fix | partial — `.max(N)`, `.int()`, looser `.max(M)` |
+| Implementation | partial — R01a only; R01b/R01c deferred |
 
 ## What it checks
 
@@ -105,6 +109,21 @@ export const createUserInputSchema = UserSchema.pick({
   }
 }
 ```
+
+## Common false positives
+
+- **DTO schemas that serialize `DateTime` as `string`.** Many projects shape their API responses so dates go over the wire as ISO strings. Prisma still reads them as `Date`, so the comparison `DateTime ↔ z.string()` looks like drift but is intentional. Suggest `z.string().datetime()` (still a string, but format-validated) or `z.coerce.date()` (parsed to Date) — either way the developer chose the trade-off, not a drift.
+- **`Json` columns with type-narrowed Zod.** `Json` in Prisma is `unknown` at the type level; teams often write a more specific Zod schema for what they expect to put there. The comparison says "expected `unknown`/`any`/`record`, got `object`" — that's tightening, not drift. Configure `R01.ignoreFields` for those columns or accept the noise.
+- **Schemas that intentionally subset the model.** A `createUserSchema` legitimately omits `id`, `createdAt`, `updatedAt`. This rule does not flag *missing* fields — only fields present on both sides that disagree — so this isn't usually a noise source, but if your matcher heuristic pairs the wrong schema (e.g. `userPublicSchema` matched to `User`), you'll see false positives. Add the schema name to `ignoreModels`.
+- **Custom Prisma types via `@db.<NativeType>`.** A few exotic types (`Bytes`, `Citext`, `Money`) aren't covered by the type compatibility table. Currently the rule returns no expected type for these and emits no finding — safe, but the type still drifts. Track in implementation notes below.
+
+## Implementation notes
+
+- **Only R01a is implemented today.** R01b and R01c require detecting which symbols are exported from the Zod-generator output dir and checking that custom schemas reference them. Discovery already detects the Zod mode; the comparison logic for hybrid mode lands in a follow-up.
+- **Source location.** Field-level findings point at the Zod field's line. The `@db.*` constraint side is reported as "from Prisma" in the message but does not link to a `schema.prisma` line — `@mrleebo/prisma-ast` doesn't expose source positions on attributes by default.
+- **Array element types.** When a Prisma field is `String[]` and the Zod schema is `z.array(...)`, the rule confirms shape compatibility but does NOT recurse into the inner element type. So `String[] ↔ z.array(z.number())` would slip through. Tracked.
+- **Enum-typed Prisma fields.** Skipped here, handled by R03.
+- **Nullability.** Skipped here, handled by R04.
 
 ## See also
 
