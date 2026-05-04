@@ -133,6 +133,7 @@ function checkTypeCompatibility(
 
   // Int requires .int() to reject non-integer numerics.
   if (prismaField.type === "Int" && !hasChainCall(zodField.chain, "int")) {
+    const insertPos = insertBeforeNullishModifiers(zodField);
     return [
       {
         ruleId: "R01",
@@ -145,8 +146,8 @@ function checkTypeCompatibility(
           edits: [
             {
               file: zod.file,
-              start: zodField.exprEnd,
-              end: zodField.exprEnd,
+              start: insertPos,
+              end: insertPos,
               newText: ".int()",
             },
           ],
@@ -171,6 +172,7 @@ function checkVarcharMax(
 
   const zodMax = readMaxConstraint(zodField.chain);
   if (zodMax === undefined) {
+    const insertPos = insertBeforeNullishModifiers(zodField);
     return [
       {
         ruleId: "R01",
@@ -183,8 +185,8 @@ function checkVarcharMax(
           edits: [
             {
               file: zod.file,
-              start: zodField.exprEnd,
-              end: zodField.exprEnd,
+              start: insertPos,
+              end: insertPos,
               newText: `.max(${dbSize})`,
             },
           ],
@@ -231,6 +233,19 @@ function findMaxArgRange(zodField: ZodField): { start: number; end: number } | u
   const max = zodField.chain.find((c) => c.name === "max");
   if (!max) return undefined;
   return max.argRanges?.[0];
+}
+
+/**
+ * Returns the source offset where a constraint like `.int()` or `.max(N)` should
+ * be inserted so it sits *before* any `.nullable()` / `.optional()` / `.nullish()`
+ * modifier. If no such modifier is present, falls back to the end of the
+ * expression. This matters because `z.number().nullable().int()` reads
+ * awkwardly and `.int()` should be applied to the value, not the union.
+ */
+function insertBeforeNullishModifiers(zodField: ZodField): number {
+  const NULLISH = new Set(["nullable", "optional", "nullish"]);
+  const first = zodField.chain.find((c) => NULLISH.has(c.name));
+  return first?.callStart ?? zodField.exprEnd;
 }
 
 function expectedZodBaseTypes(prismaType: string): string[] {

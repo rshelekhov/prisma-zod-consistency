@@ -80,6 +80,15 @@ export interface ZodChainCall {
   args: string[];
   /** Character offsets of each arg (parallel to `args`). Used for codemods that rewrite a single argument. */
   argRanges?: Array<{ start: number; end: number }>;
+  /**
+   * Character offset (start, inclusive) of the dot before the method name
+   * (e.g. for `.optional()` this points at the leading `.`). Used by
+   * codemods that need to insert text *before* a specific chained call,
+   * e.g. inserting `.int()` ahead of `.nullable()`.
+   */
+  callStart: number;
+  /** Character offset (end, exclusive) of the closing `)` of this chained call. */
+  callEnd: number;
 }
 
 export async function discoverZodSchemas(files: string[]): Promise<ZodSchemaInfo[]> {
@@ -218,6 +227,8 @@ function extractObjectFields(obj: ObjectLiteralExpression): ZodField[] {
         name: c.method,
         args: c.argTexts,
         argRanges: c.argNodes.map((node) => ({ start: node.getStart(), end: node.getEnd() })),
+        callStart: c.callStart,
+        callEnd: c.callEnd,
       })),
       ...enumExtras,
       exprStart: initializer.getStart(),
@@ -280,6 +291,8 @@ interface ChainStep {
   method: string;
   argTexts: string[];
   argNodes: Node[];
+  callStart: number;
+  callEnd: number;
 }
 
 /**
@@ -299,10 +312,15 @@ function unwindChain(rootCall: CallExpression): ChainStep[] {
       const expr = call.getExpression();
       if (Node.isPropertyAccessExpression(expr)) {
         const pa = expr as PropertyAccessExpression;
+        const nameNode = pa.getNameNode();
+        // Dot lives directly before the method name in source, so step back one.
+        const dotPos = nameNode.getStart() - 1;
         steps.unshift({
           method: pa.getName(),
           argTexts: call.getArguments().map((a) => a.getText()),
           argNodes: call.getArguments().filter(Node.isNode),
+          callStart: dotPos,
+          callEnd: call.getEnd(),
         });
         cursor = pa.getExpression();
         continue;
@@ -312,7 +330,15 @@ function unwindChain(rootCall: CallExpression): ChainStep[] {
     }
     if (Node.isPropertyAccessExpression(cursor)) {
       const pa = cursor as PropertyAccessExpression;
-      steps.unshift({ method: pa.getName(), argTexts: [], argNodes: [] });
+      const nameNode = pa.getNameNode();
+      const dotPos = nameNode.getStart() - 1;
+      steps.unshift({
+        method: pa.getName(),
+        argTexts: [],
+        argNodes: [],
+        callStart: dotPos,
+        callEnd: pa.getEnd(),
+      });
       cursor = pa.getExpression();
       continue;
     }

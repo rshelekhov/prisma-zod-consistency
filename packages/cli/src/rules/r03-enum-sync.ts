@@ -45,6 +45,17 @@ export const r03: Rule = {
 
     const findings: Finding[] = [];
 
+    // Build a name → Prisma-enum lookup of every Zod enum schema in the project.
+    // Used in Pass 2 to recognize already-correct fields like
+    //   .pipe(channelSchema)
+    // where `channelSchema` is itself bound to the matching Prisma enum.
+    const enumSchemaToPrisma = new Map<string, string>();
+    for (const schema of zodSchemas) {
+      if (schema.shape.kind !== "enum") continue;
+      const matched = matchEnumSchemaToPrisma(schema, registry);
+      if (matched) enumSchemaToPrisma.set(schema.name, matched);
+    }
+
     // Pass 1: top-level enum schemas.
     for (const schema of zodSchemas) {
       if (schema.shape.kind !== "enum") continue;
@@ -84,6 +95,7 @@ export const r03: Rule = {
             options,
             preferNativeEnum,
             registry,
+            enumSchemaToPrisma,
           ),
         );
       }
@@ -158,9 +170,16 @@ function checkFieldEnumDrift(
   options: RuleOptions,
   preferNativeEnum: boolean,
   registry: PrismaModelRegistry,
+  enumSchemaToPrisma: Map<string, string>,
 ): Finding[] {
   const prismaValues = registry.enums.get(prismaEnumName) ?? [];
   if (zodField.baseType !== "enum" && zodField.baseType !== "nativeEnum") {
+    // Common idiom: case-insensitive enum coerce via `.transform(...).pipe(z.nativeEnum(Foo))`
+    // (or `.pipe(fooSchema)` where fooSchema is itself bound to the Prisma enum).
+    // The chain is already correct; flagging it would propose a destructive replacement.
+    if (chainAlreadyValidates(zodField, prismaEnumName, enumSchemaToPrisma)) {
+      return [];
+    }
     return [
       {
         ruleId: "R03",
@@ -261,8 +280,14 @@ function diffEnumValues(
 
 /**
  * Build a fix that replaces a non-enum base call (e.g. `z.string()`) with
- * `z.nativeEnum(EnumName)`, optionally adding the import if it's not
- * already in scope.
+ * `z.nativeEnum(EnumName)`, optionally adding (or extending) the import if
+ * the symbol isn't already in scope.
+ *
+ * Import strategy:
+ *  - If `EnumName` is already imported anywhere in the file: no import edit.
+ *  - Else, if `@prisma/client` is already imported with named imports: extend
+ *    the existing `{ ... }` rather than adding a second `import { X } from "@prisma/client"`.
+ *  - Else: prepend a new `import { EnumName } from "@prisma/client";`.
  */
 function buildBaseToNativeEnumFix(
   zodField: ZodField,
@@ -280,18 +305,116 @@ function buildBaseToNativeEnumFix(
   const edits = [replaceBase];
 
   if (!enumIsInScope(source, prismaEnumName)) {
-    edits.push({
-      file,
-      start: 0,
-      end: 0,
-      newText: `import { ${prismaEnumName} } from "@prisma/client";\n`,
-    });
+    edits.push(buildPrismaClientImportEdit(file, source, prismaEnumName));
   }
 
   return {
     description: `Replace z.${zodField.baseType}() with z.nativeEnum(${prismaEnumName})`,
     edits,
   };
+}
+
+/**
+ * Decide whether to extend an existing `import { ... } from "@prisma/client"`
+ * named-import block, or to prepend a fresh import.
+ */
+function buildPrismaClientImportEdit(
+  file: string,
+  source: string,
+  symbol: string,
+): { file: string; start: number; end: number; newText: string } {
+  // Match the first `import { ... } from "@prisma/client"`. Tolerates both
+  // `import { ... }` and `import type { ... }` and either quote style.
+  const re = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["']@prisma\/client["']/;
+  const match = re.exec(source);
+
+  if (!match || match.index === undefined) {
+    return {
+      file,
+      start: 0,
+      end: 0,
+      newText: `import { ${symbol} } from "@prisma/client";\n`,
+    };
+  }
+
+  const matchStart = match.index;
+  const matchText = match[0];
+  // Position of `}` *within* the import statement, in absolute file offsets.
+  const closingBraceOffset = matchStart + matchText.lastIndexOf("}");
+  const named = match[1] ?? "";
+
+  // Decide spacing for the inserted symbol based on the existing layout.
+  const trimmed = named.trim();
+  if (trimmed === "") {
+    // `import { } from "@prisma/client"` — extremely unusual, but handle it.
+    return {
+      file,
+      start: closingBraceOffset,
+      end: closingBraceOffset,
+      newText: ` ${symbol} `,
+    };
+  }
+  if (named.includes("\n")) {
+    // Multi-line import block — match indentation of the last named entry.
+    const lines = named.split("\n");
+    const lastLine = lines[lines.length - 1] ?? "";
+    const indent = lastLine.match(/^(\s*)/)?.[1] ?? "  ";
+    const trailingComma = trimmed.endsWith(",");
+    const sep = trailingComma ? "" : ",";
+    return {
+      file,
+      start: closingBraceOffset,
+      end: closingBraceOffset,
+      newText: `${sep}\n${indent}${symbol},\n`,
+    };
+  }
+  // Single-line: `import { Foo } from "@prisma/client"` — insert before `}`.
+  const trailingComma = trimmed.endsWith(",");
+  const sep = trailingComma ? " " : ", ";
+  return {
+    file,
+    start: closingBraceOffset,
+    end: closingBraceOffset,
+    newText: `${sep}${symbol}`,
+  };
+}
+
+/**
+ * True when the field's chain already enforces the expected Prisma enum
+ * via a `.pipe(...)` step — common in case-insensitive coerce idioms
+ * like `z.string().transform((v) => v.toUpperCase()).pipe(z.nativeEnum(Foo))`.
+ *
+ * Recognized forms (string match on the pipe argument source):
+ *   - `z.nativeEnum(<EnumName>)`          — inline, exact match
+ *   - `z.nativeEnum(<EnumName>).<chain>`  — inline with further chain
+ *   - `<schemaName>`                      — variable bound to a known enum schema
+ *   - `<schemaName>.<chain>`              — same, with `.optional()` etc.
+ */
+function chainAlreadyValidates(
+  field: ZodField,
+  expectedEnum: string,
+  enumSchemaToPrisma: Map<string, string>,
+): boolean {
+  for (const call of field.chain) {
+    if (call.name !== "pipe") continue;
+    const arg = call.args[0];
+    if (!arg) continue;
+
+    // Inline `z.nativeEnum(<id>)` — leading whitespace tolerated.
+    const inline = arg.match(/^\s*z\s*\.\s*nativeEnum\s*\(\s*([A-Za-z_$][\w$]*)/);
+    if (inline?.[1] === expectedEnum) return true;
+
+    // Inline `z.enum([...])` — for the case-insensitive transform pattern,
+    // we accept any z.enum literal in the pipe as evidence the author has
+    // already constrained the value. We don't validate the literal set here
+    // because Pass 1 already covers that for top-level enum schemas.
+    if (/^\s*z\s*\.\s*enum\s*\(/.test(arg)) return true;
+
+    // Variable reference: identifier mapped to a known enum schema in this project.
+    const ident = arg.match(/^\s*([A-Za-z_$][\w$]*)/);
+    if (ident?.[1] && enumSchemaToPrisma.get(ident[1]) === expectedEnum) return true;
+  }
+  return false;
 }
 
 /**

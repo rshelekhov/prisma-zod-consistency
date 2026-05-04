@@ -6,7 +6,9 @@ Inspired by Ruby's [`database_consistency`](https://github.com/djezzzl/database_
 
 ## Status
 
-Initial release (0.x). Eight rules implemented: R01-R05 (static), R07-R09 (live DB on Postgres). R06/R10/R11 ship as skill-only checks. See [packages/checks/README.md](packages/checks/README.md) for the full rule index.
+Published on npm: [`prisma-zod-consistency`](https://www.npmjs.com/package/prisma-zod-consistency).
+
+Eight rules implemented: R01-R05 (static), R07-R09 (live DB on Postgres). R06/R10/R11 ship as skill-only checks. See [packages/checks/README.md](packages/checks/README.md) for the full rule index, and [docs/getting-started.md](docs/getting-started.md) for a five-minute walkthrough.
 
 ## What's in the box
 

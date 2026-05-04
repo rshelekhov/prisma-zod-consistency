@@ -33,6 +33,8 @@ export const r02: Rule = {
 
     const source = await readFile(ctx.schemaPath, "utf8");
     const schema = getSchema(source);
+    const sourceLines = source.split("\n");
+    const modelLineRanges = computeModelLineRanges(sourceLines);
 
     const findings: Finding[] = [];
 
@@ -62,14 +64,21 @@ export const r02: Rule = {
         if (requireOnUpdate && !argKeys.has("onUpdate")) missing.push("onUpdate");
         if (missing.length === 0) continue;
 
+        // prisma-ast does not attach source ranges to attribute nodes, so the
+        // line lookup falls back to a token scan: find the field declaration
+        // inside the model's line range. If anything goes wrong the rule still
+        // returns line 1 — useful as a stable scope anchor.
+        const range = modelLineRanges.get(modelName);
+        const line =
+          lineOf(relation) ??
+          (range ? findFieldLine(sourceLines, range, field.name) : undefined) ??
+          1;
+
         findings.push({
           ruleId: "R02",
           severity: options.severity,
           message: `Relation ${fqRelation} is missing explicit ${missing.join(" and ")}.`,
-          location: {
-            file: ctx.schemaPath,
-            line: lineOf(relation) ?? 1,
-          },
+          location: { file: ctx.schemaPath, line },
           suggestion: missing
             .map((k) => `Add \`${k}: <action>\` to the @relation arguments.`)
             .join(" "),
@@ -81,6 +90,59 @@ export const r02: Rule = {
     return findings;
   },
 };
+
+/**
+ * Walks the source line-by-line and computes 1-based [start, endExclusive]
+ * line ranges for every `model X { ... }` block. `start` points at the line
+ * with the `model X {` declaration, `endExclusive` at the line *after* the
+ * closing `}`. Tolerates nested braces (e.g. inline arrays) by counting depth.
+ */
+function computeModelLineRanges(lines: string[]): Map<string, [number, number]> {
+  const result = new Map<string, [number, number]>();
+  let inModel: { name: string; start: number; depth: number } | undefined;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (!inModel) {
+      const m = line.match(/^\s*model\s+(\w+)\s*\{/);
+      if (m?.[1]) {
+        const opens = (line.match(/\{/g) ?? []).length;
+        const closes = (line.match(/\}/g) ?? []).length;
+        inModel = { name: m[1], start: i + 1, depth: opens - closes };
+      }
+      continue;
+    }
+    inModel.depth += (line.match(/\{/g) ?? []).length;
+    inModel.depth -= (line.match(/\}/g) ?? []).length;
+    if (inModel.depth <= 0) {
+      result.set(inModel.name, [inModel.start, i + 2]);
+      inModel = undefined;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Inside a model's line range, find the line where `fieldName` is declared.
+ * Heuristic: the field declaration is the first line in the range that begins
+ * (after whitespace) with the field name as a whole token. Returns 1-based
+ * line number, or undefined if no match.
+ */
+function findFieldLine(
+  lines: string[],
+  range: [number, number],
+  fieldName: string,
+): number | undefined {
+  const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^\\s*${escaped}\\s+\\S`);
+  const start = Math.max(range[0] - 1, 0);
+  const end = Math.min(range[1] - 1, lines.length);
+  for (let i = start; i < end; i++) {
+    if (re.test(lines[i] ?? "")) return i + 1;
+  }
+  return undefined;
+}
 
 /**
  * Pulls the set of named keys from a `@relation(...)` attribute's arg list.
