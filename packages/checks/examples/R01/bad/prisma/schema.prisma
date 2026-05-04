@@ -1,0 +1,18 @@
+// Bad fixture for R01: Zod schema drifts from Prisma in three ways.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id    String   @id @default(cuid())
+  email String   @unique @db.VarChar(255)
+  name  String   @db.VarChar(100)
+  age   Int
+  tags  String[]
+}

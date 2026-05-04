@@ -11,6 +11,7 @@
 
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
+import { glob } from "tinyglobby";
 import type { ResolvedConfig } from "./config.js";
 import type { KnownZodGenerator, ProjectContext, ZodMode } from "./types.js";
 
@@ -32,11 +33,18 @@ export async function discover(config: ResolvedConfig): Promise<ProjectContext> 
     throw err;
   });
 
+  const sourceFiles = await glob(config.include, {
+    cwd: config.rootDir,
+    absolute: true,
+    ignore: config.exclude,
+    dot: false,
+  });
+
   return {
     rootDir: config.rootDir,
     schemaPath,
     provider: detectProvider(schemaSource),
-    sourceFiles: [], // populated by ts-morph in a later iteration
+    sourceFiles,
     zodMode: detectZodMode(schemaSource),
   };
 }

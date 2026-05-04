@@ -4,9 +4,13 @@
  */
 
 import type { Rule, RuleId } from "../types.js";
+import { r01 } from "./r01-zod-prisma-drift.js";
 import { r02 } from "./r02-onDelete.js";
 
-const REGISTRY: Map<RuleId, Rule> = new Map([[r02.id, r02]]);
+const REGISTRY: Map<RuleId, Rule> = new Map([
+  [r01.id, r01],
+  [r02.id, r02],
+]);
 
 export function getRule(id: RuleId): Rule | undefined {
   return REGISTRY.get(id);
