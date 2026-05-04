@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 import { run } from "../src/runner.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -17,28 +17,20 @@ describe("R04 — nullability mismatch", () => {
 
     // 1. email: required in Prisma + Zod .nullable() → API accepts null but DB rejects.
     expect(
-      messages.some(
-        (m) => m.includes("email") && m.includes("required") && m.includes("null"),
-      ),
+      messages.some((m) => m.includes("email") && m.includes("required") && m.includes("null")),
     ).toBe(true);
 
     // 2. name: optional in Prisma + Zod has nothing → DB reads with NULL fail.
     expect(
       messages.some(
-        (m) =>
-          m.includes("name") &&
-          m.includes("optional in Prisma") &&
-          m.includes("non-null"),
+        (m) => m.includes("name") && m.includes("optional in Prisma") && m.includes("non-null"),
       ),
     ).toBe(true);
 
     // 3. bio: optional in Prisma + Zod .min(1) (no nullability).
     expect(
       messages.some(
-        (m) =>
-          m.includes("bio") &&
-          m.includes("optional in Prisma") &&
-          m.includes("non-null"),
+        (m) => m.includes("bio") && m.includes("optional in Prisma") && m.includes("non-null"),
       ),
     ).toBe(true);
 

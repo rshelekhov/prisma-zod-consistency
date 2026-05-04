@@ -4,11 +4,7 @@
   "private": true,
   "description": "Source of truth for prisma-zod-consistency rules. Markdown specs + good/bad examples, consumed by the CLI and the skills.",
   "license": "MIT",
-  "files": [
-    "rules",
-    "examples",
-    "README.md"
-  ],
+  "files": ["rules", "examples", "README.md"],
   "scripts": {
     "lint": "echo 'no lint for checks (markdown only)'",
     "test": "echo 'no tests for checks (specs only)'",

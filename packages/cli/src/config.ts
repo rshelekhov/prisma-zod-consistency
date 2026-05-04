@@ -24,7 +24,8 @@ export interface RuleConfig {
   [key: string]: unknown;
 }
 
-export interface ResolvedConfig extends Required<Pick<UserConfig, "schemaPath" | "include" | "exclude" | "rules">> {
+export interface ResolvedConfig
+  extends Required<Pick<UserConfig, "schemaPath" | "include" | "exclude" | "rules">> {
   /** Absolute path to the directory containing the config file (or cwd if none). */
   rootDir: string;
 }

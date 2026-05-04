@@ -21,17 +21,10 @@
  */
 
 import { readFile } from "node:fs/promises";
-import {
-  loadPrismaRegistry,
-  type PrismaModelRegistry,
-} from "../schema/prisma-models.js";
-import {
-  discoverZodSchemas,
-  type ZodField,
-  type ZodSchemaInfo,
-} from "../zod/discover.js";
+import { type PrismaModelRegistry, loadPrismaRegistry } from "../schema/prisma-models.js";
+import type { Finding, Fix, ProjectContext, Rule, RuleOptions } from "../types.js";
+import { type ZodField, type ZodSchemaInfo, discoverZodSchemas } from "../zod/discover.js";
 import { matchSchemasToModels } from "../zod/match.js";
-import type { Fix, Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
 interface R03Config {
   ignoreEnums?: string[];
@@ -311,8 +304,7 @@ function enumIsInScope(source: string, name: string): boolean {
   const head = source.split("\n").slice(0, 80).join("\n");
   // Look for { ... name ... } in any import declaration.
   const importRegex = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["'][^"']+["']/g;
-  let match: RegExpExecArray | null;
-  while ((match = importRegex.exec(head)) !== null) {
+  for (const match of head.matchAll(importRegex)) {
     const namedImports = match[1] ?? "";
     const symbols = namedImports.split(",").map((s) => {
       // Handle "X as Y" — the local binding is Y.

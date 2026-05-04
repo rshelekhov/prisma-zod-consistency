@@ -28,10 +28,7 @@ export interface FileApplyReport {
   skipped: number;
 }
 
-export async function applyFixes(
-  findings: Finding[],
-  options: ApplyOptions,
-): Promise<ApplyReport> {
+export async function applyFixes(findings: Finding[], options: ApplyOptions): Promise<ApplyReport> {
   const editsByFile = collectEdits(findings);
   const reports: FileApplyReport[] = [];
   let totalApplied = 0;
@@ -87,7 +84,7 @@ function applyEditsToText(source: string, edits: FileEdit[]): ApplyResult {
   let content = source;
   let applied = 0;
   let skipped = 0;
-  let lastAppliedStart = Infinity;
+  let lastAppliedStart = Number.POSITIVE_INFINITY;
 
   for (const edit of sorted) {
     if (edit.end > lastAppliedStart) {

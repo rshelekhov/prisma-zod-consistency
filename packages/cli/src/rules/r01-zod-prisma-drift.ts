@@ -14,10 +14,19 @@
  * See: packages/checks/rules/R01-zod-prisma-field-drift.md
  */
 
-import { loadPrismaRegistry, type FieldInfo, type PrismaModelRegistry } from "../schema/prisma-models.js";
-import { discoverZodSchemas, type ZodChainCall, type ZodField, type ZodSchemaInfo } from "../zod/discover.js";
-import { matchSchemasToModels } from "../zod/match.js";
+import {
+  type FieldInfo,
+  type PrismaModelRegistry,
+  loadPrismaRegistry,
+} from "../schema/prisma-models.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
+import {
+  type ZodChainCall,
+  type ZodField,
+  type ZodSchemaInfo,
+  discoverZodSchemas,
+} from "../zod/discover.js";
+import { matchSchemasToModels } from "../zod/match.js";
 
 interface R01Config {
   ignoreModels?: string[];
@@ -130,7 +139,7 @@ function checkTypeCompatibility(
         severity: options.severity,
         message: `Field \`${prismaField.name}\` is \`Int\` in Prisma but the Zod schema in \`${zod.name}\` uses \`z.number()\` without \`.int()\`.`,
         location: { file: zod.file, line: zodField.line },
-        suggestion: `Add \`.int()\` to the chain so non-integer numerics are rejected.`,
+        suggestion: "Add `.int()` to the chain so non-integer numerics are rejected.",
         fix: {
           description: `Append .int() to ${zod.name}.${prismaField.name}`,
           edits: [

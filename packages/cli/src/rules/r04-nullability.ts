@@ -23,18 +23,18 @@
  */
 
 import {
-  loadPrismaRegistry,
   type FieldInfo,
   type PrismaModelRegistry,
+  loadPrismaRegistry,
 } from "../schema/prisma-models.js";
+import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 import {
-  discoverZodSchemas,
   type ZodChainCall,
   type ZodField,
   type ZodSchemaInfo,
+  discoverZodSchemas,
 } from "../zod/discover.js";
 import { matchSchemasToModels } from "../zod/match.js";
-import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
 interface R04Config {
   ignoreModels?: string[];

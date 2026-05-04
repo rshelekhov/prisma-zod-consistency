@@ -4,8 +4,6 @@ This directory holds [changesets](https://github.com/changesets/changesets) — 
 
 The skill packages (`skill-claude-code`, `skill-codex`) and `checks` are private/internal and do **not** get versioned via changesets — they ride with the repo's git tags. Only `prisma-zod-consistency` (the CLI) is the publishable npm package, managed by changesets.
 
-Note: while the CLI is in pre-alpha, it is also marked `private: true` in its `package.json` so the release workflow exits cleanly without publishing. See the root README's "Publishing" section for the unflip flow.
-
 ## Adding a changeset
 
 ```bash

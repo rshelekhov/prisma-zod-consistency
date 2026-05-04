@@ -62,7 +62,9 @@ function detectProvider(schemaSource: string): ProjectContext["provider"] {
     case "cockroachdb":
       return provider;
     default:
-      throw new DiscoveryError(`Unsupported or missing datasource provider: ${provider ?? "<none>"}`);
+      throw new DiscoveryError(
+        `Unsupported or missing datasource provider: ${provider ?? "<none>"}`,
+      );
   }
 }
 

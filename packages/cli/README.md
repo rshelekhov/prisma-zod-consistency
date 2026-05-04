@@ -4,13 +4,17 @@ Deterministic static analysis for Prisma + Zod + TypeScript projects. Run it in 
 
 ## Status
 
-Pre-alpha (`private: true` until R01-R05 stabilize on real codebases). Eight rules implemented: R01-R05 (static), R07-R09 (live DB). R06/R10/R11 are skill-only by design. See [the rule catalog](../checks/rules) for the full list.
+Initial release (0.x). Eight rules implemented: R01-R05 (static), R07-R09 (live DB). R06/R10/R11 are skill-only by design. See [the rule catalog](../checks/rules) for the full list.
 
 ## Install
 
 ```bash
-# Once published:
 pnpm add -D prisma-zod-consistency
+# or: npm install --save-dev prisma-zod-consistency
+# or: yarn add -D prisma-zod-consistency
+
+# Try it without installing:
+npx prisma-zod-consistency
 
 # During development, link a local checkout:
 cd /path/to/prisma-zod-consistency

@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, cp } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve, join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 import { applyFixes } from "../src/fix/apply.js";
 import { run } from "../src/runner.js";
 

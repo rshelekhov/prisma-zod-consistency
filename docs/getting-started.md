@@ -1,0 +1,187 @@
+# Getting started
+
+Five-minute walkthrough: from `npx` to a green CI check on your own Prisma + Zod project.
+
+## What this tool does
+
+`prisma-zod-consistency` finds drift between three things that are supposed to agree but routinely don't:
+
+1. **`schema.prisma`** — the database schema
+2. **Zod schemas** — runtime validation at the API boundary
+3. **TypeScript code** — how those schemas are actually used (and bypassed)
+
+It runs as a deterministic linter (suitable for CI), and ships with two AI-driven skill bundles for context-aware reviews inside Claude Code or Codex. This guide covers the CLI.
+
+## Prerequisites
+
+- Node.js 20+
+- A Prisma project (`schema.prisma` somewhere in your repo)
+- Zod schemas (hand-written, generated, or both — see [R01](../packages/checks/rules/R01-zod-prisma-drift.md) for what each mode means)
+
+## 1. Try it without installing
+
+```bash
+npx prisma-zod-consistency
+```
+
+That's it. From the root of your project, this:
+
+- Looks for `prisma/schema.prisma`
+- Looks for Zod schemas under `src/**/*.{ts,tsx}` (configurable)
+- Detects whether you use a Zod generator (e.g. `zod-prisma-types`) by reading `generator` blocks in `schema.prisma`
+- Runs all rules whose preconditions are met and prints findings
+
+If nothing's wrong, you get a clean exit. If there's drift, you get a report. **Exit code 0** means no `error`-severity findings. **Exit code 1** means at least one error — that's the CI gate.
+
+## 2. Install it for real
+
+Once you've decided you want it in CI:
+
+```bash
+pnpm add -D prisma-zod-consistency
+# or: npm install --save-dev prisma-zod-consistency
+# or: yarn add -D prisma-zod-consistency
+```
+
+The package installs two equivalent binaries:
+
+- `prisma-zod-consistency` — canonical name for CI scripts
+- `pz-check` — short alias for interactive use
+
+Both run the same code; pick whichever reads better in your context.
+
+## 3. Read the output
+
+Default human-readable format:
+
+```
+src/schemas/user.ts:14
+  R01 [error] Field `email` is `@db.VarChar(255)` in Prisma but Zod has no .max() constraint.
+  → Add `.max(255)` to email in userSchema.
+
+prisma/schema.prisma:42
+  R02 [warning] Relation `User.organization` has no explicit @relation onDelete.
+  → Set onDelete: Cascade | Restrict | SetNull | NoAction explicitly.
+
+Summary: 1 error, 1 warning, 0 info
+```
+
+Machine-readable (JSON):
+
+```bash
+prisma-zod-consistency --output json > findings.json
+```
+
+Then filter with `jq`, store the artifact in CI, etc. See the [CLI README](../packages/cli/README.md#json-shape) for the full schema.
+
+## 4. Configure (optional)
+
+The defaults work for most projects. You add a config when you need to:
+
+- Point at a non-standard `schema.prisma` location
+- Narrow the include/exclude globs
+- Tune severity per rule, ignore specific models or relations
+- Configure live-DB rules (R07/R08/R09)
+
+Pick one of these locations (cosmiconfig searches up from cwd):
+
+- `.prismazodrc.json` (or `.js`, `.cjs`, `.mjs`)
+- `prismazod.config.{js,cjs,mjs}`
+- `"prisma-zod-consistency"` field in `package.json`
+
+Minimal example:
+
+```jsonc
+// .prismazodrc.json
+{
+  "schemaPath": "prisma/schema.prisma",
+  "include": ["src/**/*.ts"],
+  "exclude": ["**/*.test.ts", "**/*.spec.ts", "**/node_modules/**"],
+
+  "rules": {
+    "R02": { "severity": "warning", "requireOnUpdate": false },
+    "R05": { "severity": "warning", "framework": "hono" }
+  }
+}
+```
+
+Per-rule options live in the rule specs at [`packages/checks/rules/`](../packages/checks/rules).
+
+## 5. Auto-fix the safe subset
+
+For two rules (R01 and R03) the fix is mechanical and safe to apply:
+
+```bash
+# Preview the diff:
+prisma-zod-consistency fix
+
+# Apply:
+prisma-zod-consistency fix --apply
+```
+
+What gets fixed:
+
+- **R01** — appends `.max(N)` to Zod fields backed by `@db.VarChar(N)`, appends `.int()` for `Int` fields, lowers a too-loose `.max(M)`
+- **R03** — replaces `z.string()` with `z.nativeEnum(EnumName)` when the Prisma field is an enum (auto-imports `EnumName` from `@prisma/client`)
+
+What is **not** auto-fixed:
+
+- `schema.prisma` is never touched (schema changes imply migrations)
+- R02 / R04 / R05 — the right action is contextual, no safe mechanical rewrite
+
+## 6. Live-DB mode (R07/R08/R09)
+
+The static rules don't need a database. The Group B rules do — they snapshot the live DB and compare it against `schema.prisma`:
+
+- **R07** — redundant indexes
+- **R08** — unused indexes (uses pg_stat_user_indexes)
+- **R09** — schema drift (column-level)
+
+```bash
+DATABASE_URL=postgres://... prisma-zod-consistency --db --rules R07,R08,R09
+```
+
+Postgres is supported today; MySQL/SQLite are on the roadmap. Without `--db`, Group B rules silently skip — same binary works in CI jobs that have DB access and ones that don't.
+
+## 7. Wire it into CI
+
+Minimal GitHub Actions step:
+
+```yaml
+- name: Prisma+Zod consistency
+  run: pnpm exec prisma-zod-consistency --output json > pzc-findings.json
+
+- if: failure()
+  run: |
+    echo "::group::Errors"
+    jq '.findings[] | select(.severity == "error")' pzc-findings.json
+    echo "::endgroup::"
+```
+
+For Group B you typically want a separate job that has DB access:
+
+```yaml
+- run: |
+    DATABASE_URL=${{ secrets.DATABASE_URL }} \
+      prisma-zod-consistency --rules R07,R08,R09 --db --output json \
+      > pzc-db-findings.json
+```
+
+## 8. Where to go from here
+
+- **Full flag reference** — [`packages/cli/README.md`](../packages/cli/README.md)
+- **All rules with examples** — [`packages/checks/rules/`](../packages/checks/rules)
+- **Skill bundle (Claude Code)** — [`packages/skill-claude-code/`](../packages/skill-claude-code)
+- **Skill bundle (Codex / AGENTS.md)** — [`packages/skill-codex/`](../packages/skill-codex)
+
+If something looks like a false positive, check the rule spec's "Common false positives" section first — most of them are documented with the right config knob to silence.
+
+## Troubleshooting
+
+**`schema.prisma not found`** — your project keeps it somewhere other than `prisma/schema.prisma`. Set `schemaPath` in config.
+
+**`Unsupported or missing datasource provider`** — your `datasource` block doesn't declare a `provider`, or it's a provider this tool doesn't recognize. Currently supported: `postgresql`, `mysql`, `sqlite`, `sqlserver`, `mongodb`, `cockroachdb`.
+
+**No findings, but you expected some** — check that your `include` glob actually matches your Zod schemas. Run with `--rules R04` (the loudest static rule) to verify rules are reaching your files.
+
+**`DATABASE_URL not set`** — you passed `--db` but no URL is exported in the environment. Either export it, or pass `--database-url <url>`.

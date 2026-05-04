@@ -89,10 +89,7 @@ export type ZodMode =
   | { kind: "generated"; generator: KnownZodGenerator; outputDir: string }
   | { kind: "hybrid"; generator: KnownZodGenerator; outputDir: string };
 
-export type KnownZodGenerator =
-  | "zod-prisma-types"
-  | "prisma-zod-generator"
-  | "zod-prisma";
+export type KnownZodGenerator = "zod-prisma-types" | "prisma-zod-generator" | "zod-prisma";
 
 /** A rule implementation. */
 export interface Rule {

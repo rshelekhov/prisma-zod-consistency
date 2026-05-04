@@ -23,9 +23,9 @@
 
 import type { DbColumn } from "../db/types.js";
 import {
-  loadPrismaRegistry,
   type FieldInfo,
   type PrismaModelRegistry,
+  loadPrismaRegistry,
 } from "../schema/prisma-models.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
@@ -95,7 +95,7 @@ export function diffPrismaVsDb(
           severity: options.severity,
           message: `Field \`${model.name}.${field.name}\` (column \`${dbColName}\`) is declared in schema.prisma but missing in the database.`,
           location: { file: "<live-db>", line: 1 },
-          suggestion: `Run pending migrations.`,
+          suggestion: "Run pending migrations.",
           scope: { model: model.name, field: field.name },
         });
         continue;
@@ -114,7 +114,8 @@ export function diffPrismaVsDb(
           severity: options.severity,
           message: `Nullability drift on \`${model.name}.${field.name}\`: Prisma says ${prismaSays}, DB says ${dbSays}.`,
           location: { file: "<live-db>", line: 1 },
-          suggestion: `Reconcile via a migration or update schema.prisma to match the actual column.`,
+          suggestion:
+            "Reconcile via a migration or update schema.prisma to match the actual column.",
           scope: { model: model.name, field: field.name },
         });
       }

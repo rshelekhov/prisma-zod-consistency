@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 import { run } from "../src/runner.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -38,10 +38,7 @@ describe("R03 — enum sync", () => {
     // 3. bookingDtoSchema.status: should use enum, not z.string().
     expect(
       messages.some(
-        (m) =>
-          m.includes("status") &&
-          m.includes("BookingStatus") &&
-          m.includes("z.string()"),
+        (m) => m.includes("status") && m.includes("BookingStatus") && m.includes("z.string()"),
       ),
     ).toBe(true);
 

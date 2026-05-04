@@ -71,12 +71,12 @@ describe("R09 — schema drift vs DB", () => {
     const registry = makeRegistry({
       User: { id: { type: "String" }, email: { type: "String" } },
     });
-    const dbColumns: DbColumn[] = [
-      col({ tableName: "User", columnName: "id", isNullable: false }),
-    ];
+    const dbColumns: DbColumn[] = [col({ tableName: "User", columnName: "id", isNullable: false })];
     const findings = diffPrismaVsDb(registry, dbColumns, opts());
     expect(
-      findings.some((f) => f.message.includes("email") && f.message.includes("missing in the database")),
+      findings.some(
+        (f) => f.message.includes("email") && f.message.includes("missing in the database"),
+      ),
     ).toBe(true);
   });
 
@@ -90,7 +90,10 @@ describe("R09 — schema drift vs DB", () => {
     ];
     const findings = diffPrismaVsDb(registry, dbColumns, opts());
     expect(
-      findings.some((f) => f.message.includes("legacy_flag") && f.message.includes("not declared in schema.prisma")),
+      findings.some(
+        (f) =>
+          f.message.includes("legacy_flag") && f.message.includes("not declared in schema.prisma"),
+      ),
     ).toBe(true);
   });
 

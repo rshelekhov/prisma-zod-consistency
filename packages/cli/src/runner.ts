@@ -2,10 +2,10 @@
  * Orchestrates a single CLI run: load config → discover project → run rules → return findings.
  */
 
-import { loadConfig, type RuleConfig } from "./config.js";
+import { type RuleConfig, loadConfig } from "./config.js";
 import { snapshotDatabase } from "./db/postgres.js";
 import { discover } from "./discovery.js";
-import { allRules, DB_RULES, getRule } from "./rules/index.js";
+import { DB_RULES, allRules, getRule } from "./rules/index.js";
 import type { Finding, ProjectContext, Rule, RuleId, Severity } from "./types.js";
 
 export interface RunOptions {
@@ -35,7 +35,7 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
   const wantsDbRule = requested.some((id) => DB_RULES.has(id));
 
   if (options.db && wantsDbRule) {
-    const url = options.databaseUrl ?? process.env["DATABASE_URL"];
+    const url = options.databaseUrl ?? process.env.DATABASE_URL;
     if (!url) {
       throw new Error(
         "DB rules requested but no DATABASE_URL is set. Pass --database-url or export DATABASE_URL.",

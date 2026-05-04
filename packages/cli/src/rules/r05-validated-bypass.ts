@@ -22,7 +22,7 @@
 
 import { readFile } from "node:fs/promises";
 import {
-  CallExpression,
+  type CallExpression,
   Node,
   Project,
   type PropertyAccessExpression,

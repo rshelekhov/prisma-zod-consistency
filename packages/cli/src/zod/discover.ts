@@ -13,11 +13,11 @@
 
 import { readFile } from "node:fs/promises";
 import {
-  CallExpression,
-  Node,
-  Project,
+  type CallExpression,
   type Identifier,
+  Node,
   type ObjectLiteralExpression,
+  Project,
   type PropertyAccessExpression,
   type SourceFile,
   type VariableDeclaration,
@@ -82,9 +82,7 @@ export interface ZodChainCall {
   argRanges?: Array<{ start: number; end: number }>;
 }
 
-export async function discoverZodSchemas(
-  files: string[],
-): Promise<ZodSchemaInfo[]> {
+export async function discoverZodSchemas(files: string[]): Promise<ZodSchemaInfo[]> {
   if (files.length === 0) return [];
 
   const project = new Project({
@@ -336,7 +334,5 @@ function baseTypePrefixLength(chain: ChainStep[]): number {
 }
 
 function lineOf(node: Node | VariableDeclaration): number {
-  return node
-    .getSourceFile()
-    .getLineAndColumnAtPos(node.getStart()).line;
+  return node.getSourceFile().getLineAndColumnAtPos(node.getStart()).line;
 }

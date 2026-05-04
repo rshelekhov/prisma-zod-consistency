@@ -59,7 +59,7 @@ program
         }
 
         const out = renderOutput(opts.output, findings);
-        process.stdout.write(out + "\n");
+        process.stdout.write(`${out}\n`);
 
         const hasErrors = findings.some((f) => f.severity === "error");
         process.exit(hasErrors ? 1 : 0);
@@ -103,7 +103,7 @@ program
           );
         }
       } else {
-        process.stdout.write(formatDiff(report.files, opts.cwd) + "\n");
+        process.stdout.write(`${formatDiff(report.files, opts.cwd)}\n`);
         process.stdout.write(
           pc.dim(
             `${report.totalEditsApplied} edit(s) would be applied across ${report.files.filter((f) => f.applied > 0).length} file(s). Run with --apply to write them.\n`,
@@ -131,7 +131,6 @@ function renderOutput(format: string, findings: Finding[]): string {
       return formatJson(findings);
     case "sarif":
       return formatSarif(findings);
-    case "pretty":
     default:
       return formatPretty(findings);
   }

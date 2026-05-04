@@ -6,7 +6,7 @@ Inspired by Ruby's [`database_consistency`](https://github.com/djezzzl/database_
 
 ## Status
 
-Pre-alpha. Scaffolding only. Not published to npm yet.
+Initial release (0.x). Eight rules implemented: R01-R05 (static), R07-R09 (live DB on Postgres). R06/R10/R11 ship as skill-only checks. See [packages/checks/README.md](packages/checks/README.md) for the full rule index.
 
 ## What's in the box
 
@@ -15,7 +15,7 @@ This is a monorepo with four packages:
 | Package | What it does |
 |---|---|
 | `packages/checks` | Source of truth for all rules — markdown specs + good/bad examples. Consumed by both the CLI and the skills. |
-| `packages/cli` | `prisma-zod-consistency` — the published npm package (currently `private: true` while in pre-alpha). Deterministic static analysis for CI. |
+| `packages/cli` | `prisma-zod-consistency` — the published npm package. Deterministic static analysis for CI. |
 | `packages/skill-claude-code` | Skill bundle for Claude Code. Adds context-aware analysis and suggested fixes. |
 | `packages/skill-codex` | `AGENTS.md` instructions for Codex. Same checks, Codex format. |
 
@@ -36,20 +36,28 @@ pnpm build
 pnpm test
 ```
 
+## Quick start
+
+New here? Five-minute walkthrough at [docs/getting-started.md](docs/getting-started.md) — from `npx` to a green CI check on your own project.
+
+For the full CLI flag reference, see [packages/cli/README.md](packages/cli/README.md).
+
 ## Roadmap
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the phased roadmap (Phase 1: skill MVP for Group A static checks → Phase 1.5: live DB audit → Phase 2: CLI MVP → Phase 2.5: CLI DB mode + SARIF output).
 
 ## Publishing
 
-The `prisma-zod-consistency` CLI package is currently marked `private: true` while the rule set is in pre-alpha. The release workflow runs on every push to `main` but skips the package as long as `private: true`.
+Releases are managed by [changesets](https://github.com/changesets/changesets) and published from CI on merge to `main`.
 
-When the rule set stabilizes (target: R01–R05 implemented and validated), unflip:
+To cut a release:
 
-1. Remove `"private": true` from `packages/cli/package.json`.
-2. Configure npm trusted publishing for the package on https://www.npmjs.com (Settings → Publishing access → Add trusted publisher with this repo + workflow).
-3. Add a changeset: `pnpm changeset`. Pick the rule set bump and write a one-line summary.
-4. Push to `main`. The workflow will open a "Version Packages" PR; merging it triggers the actual `npm publish`.
+1. Create a changeset for your change: `pnpm changeset`. Pick `patch` / `minor` / `major` and write a one-line summary.
+2. Commit the changeset alongside your code and push.
+3. The release workflow opens (or updates) a "Version Packages" PR that bumps versions and updates `CHANGELOG.md` based on pending changesets.
+4. Merging that PR triggers `npm publish` automatically (via the trusted publisher binding configured on npmjs.com).
+
+Only the CLI package (`prisma-zod-consistency`) is published. The skill bundles and `@prisma-zod-consistency/checks` are repo-internal and ride with git tags.
 
 ## License
 

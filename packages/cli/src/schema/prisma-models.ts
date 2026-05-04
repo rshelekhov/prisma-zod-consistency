@@ -114,7 +114,9 @@ function readMapAttribute(attr: { name: string; args?: unknown[] }): string | un
   return undefined;
 }
 
-function isBlockAttribute(prop: unknown): prop is { type: "attribute"; name: string; args?: unknown[] } {
+function isBlockAttribute(
+  prop: unknown,
+): prop is { type: "attribute"; name: string; args?: unknown[] } {
   return (
     isObject(prop) &&
     (prop as { type?: unknown }).type === "attribute" &&

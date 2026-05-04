@@ -1,8 +1,7 @@
 {
   "name": "prisma-zod-consistency",
   "version": "0.0.0",
-  "private": true,
-  "description": "CLI for prisma-zod-consistency — deterministic static analysis for Prisma + Zod + TypeScript projects.",
+  "description": "CLI for prisma-zod-consistency — deterministic static analysis for Prisma + Zod + TypeScript projects. Catches drift between schema.prisma, Zod schemas, and TypeScript code.",
   "license": "MIT",
   "author": "Roman Shelekhov",
   "repository": {
@@ -24,14 +23,11 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": [
-    "dist",
-    "README.md"
-  ],
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "lint": "echo 'lint placeholder — wire up Biome in next iteration'",
+    "lint": "biome check src tests",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -53,13 +49,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "keywords": [
-    "prisma",
-    "zod",
-    "consistency",
-    "lint",
-    "static-analysis",
-    "database",
-    "schema"
-  ]
+  "keywords": ["prisma", "zod", "consistency", "lint", "static-analysis", "database", "schema"]
 }

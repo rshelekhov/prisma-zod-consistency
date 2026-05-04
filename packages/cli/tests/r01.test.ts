@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 import { run } from "../src/runner.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
