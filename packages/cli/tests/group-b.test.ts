@@ -107,6 +107,18 @@ describe("R09 — schema drift vs DB", () => {
     expect(findings).toEqual([]);
   });
 
+  it("does not flag nullability on array fields (Postgres array columns are nullable at the SQL level by Prisma idiom)", () => {
+    const registry = makeRegistry({ Contact: { tags: { type: "String" } } });
+    // Mark the field as an array via the helper extension below.
+    const contact = registry.models.get("Contact");
+    if (contact) contact.fields[0]!.isArray = true;
+    const dbColumns: DbColumn[] = [
+      col({ tableName: "Contact", columnName: "tags", isNullable: true }),
+    ];
+    const findings = diffPrismaVsDb(registry, dbColumns, opts());
+    expect(findings).toEqual([]);
+  });
+
   it("flags nullability drift", () => {
     const registry = makeRegistry({
       User: { id: { type: "String" }, name: { type: "String", isOptional: true } },

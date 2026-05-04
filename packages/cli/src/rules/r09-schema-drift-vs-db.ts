@@ -101,8 +101,12 @@ export function diffPrismaVsDb(
         continue;
       }
 
-      // Nullability mismatch
-      if (field.isOptional !== dbCol.isNullable) {
+      // Nullability mismatch — but skip arrays. Prisma `String[]` (required)
+      // compiles to a Postgres `text[]` column that is nullable at the SQL
+      // level by default; the Prisma client hides the NULL/empty distinction
+      // by always returning [] on read. Flagging this would be a guaranteed
+      // false positive on every array column.
+      if (!field.isArray && field.isOptional !== dbCol.isNullable) {
         const prismaSays = field.isOptional ? "optional" : "required";
         const dbSays = dbCol.isNullable ? "nullable" : "NOT NULL";
         findings.push({
