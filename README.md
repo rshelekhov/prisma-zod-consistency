@@ -15,7 +15,7 @@ This is a monorepo with four packages:
 | Package | What it does |
 |---|---|
 | `packages/checks` | Source of truth for all rules — markdown specs + good/bad examples. Consumed by both the CLI and the skills. |
-| `packages/cli` | `@prisma-zod-consistency/cli` — npm package. Deterministic static analysis for CI. |
+| `packages/cli` | `prisma-zod-consistency` — the published npm package (currently `private: true` while in pre-alpha). Deterministic static analysis for CI. |
 | `packages/skill-claude-code` | Skill bundle for Claude Code. Adds context-aware analysis and suggested fixes. |
 | `packages/skill-codex` | `AGENTS.md` instructions for Codex. Same checks, Codex format. |
 
@@ -39,6 +39,17 @@ pnpm test
 ## Roadmap
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the phased roadmap (Phase 1: skill MVP for Group A static checks → Phase 1.5: live DB audit → Phase 2: CLI MVP → Phase 2.5: CLI DB mode + SARIF output).
+
+## Publishing
+
+The `prisma-zod-consistency` CLI package is currently marked `private: true` while the rule set is in pre-alpha. The release workflow runs on every push to `main` but skips the package as long as `private: true`.
+
+When the rule set stabilizes (target: R01–R05 implemented and validated), unflip:
+
+1. Remove `"private": true` from `packages/cli/package.json`.
+2. Configure npm trusted publishing for the package on https://www.npmjs.com (Settings → Publishing access → Add trusted publisher with this repo + workflow).
+3. Add a changeset: `pnpm changeset`. Pick the rule set bump and write a one-line summary.
+4. Push to `main`. The workflow will open a "Version Packages" PR; merging it triggers the actual `npm publish`.
 
 ## License
 

@@ -1,4 +1,4 @@
-# @prisma-zod-consistency/cli
+# prisma-zod-consistency (CLI)
 
 Deterministic static analysis for Prisma + Zod + TypeScript projects. Run in CI; gives a green/red verdict.
 
@@ -11,8 +11,8 @@ Pre-alpha. Scaffold only — only R02 is wired through end-to-end as a proof of 
 ## Install
 
 ```bash
-# Not yet published.
-pnpm add -D @prisma-zod-consistency/cli
+# Not yet published — package is currently marked private until R01-R05 are stable.
+pnpm add -D prisma-zod-consistency
 ```
 
 ## Usage
