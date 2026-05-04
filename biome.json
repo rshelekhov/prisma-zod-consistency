@@ -55,5 +55,13 @@
         "noForEach": "off"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": ["**/package.json"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ]
 }
