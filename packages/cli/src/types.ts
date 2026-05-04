@@ -80,6 +80,8 @@ export interface ProjectContext {
   sourceFiles: string[];
   /** Detected Zod-generation mode (drives R01). */
   zodMode: ZodMode;
+  /** Live-DB snapshot. Populated when `--db` is passed and DATABASE_URL is set. */
+  db?: import("./db/types.js").DbSnapshot;
 }
 
 export type ZodMode =

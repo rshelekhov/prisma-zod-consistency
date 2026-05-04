@@ -30,34 +30,46 @@ program
     "Output format: pretty | json | sarif (sarif is Phase 2 placeholder)",
     "pretty",
   )
-  .action(async (opts: { cwd?: string; rules?: string; output: string }) => {
-    try {
-      const ruleIds = opts.rules
-        ? (opts.rules.split(",").map((s) => s.trim()) as RuleId[])
-        : undefined;
+  .option("--db", "Enable Group B rules (R07/R08/R09) by snapshotting the live DB.", false)
+  .option("--database-url <url>", "Override DATABASE_URL for --db.")
+  .action(
+    async (opts: {
+      cwd?: string;
+      rules?: string;
+      output: string;
+      db?: boolean;
+      databaseUrl?: string;
+    }) => {
+      try {
+        const ruleIds = opts.rules
+          ? (opts.rules.split(",").map((s) => s.trim()) as RuleId[])
+          : undefined;
 
-      const { findings, skippedRules } = await run({
-        cwd: opts.cwd,
-        rules: ruleIds,
-      });
+        const { findings, skippedRules } = await run({
+          cwd: opts.cwd,
+          rules: ruleIds,
+          db: opts.db,
+          databaseUrl: opts.databaseUrl,
+        });
 
-      if (skippedRules.length > 0 && opts.output === "pretty") {
-        process.stderr.write(
-          `note: skipped unregistered rule(s): ${skippedRules.join(", ")}\n`,
-        );
+        if (skippedRules.length > 0 && opts.output === "pretty") {
+          process.stderr.write(
+            `note: skipped unregistered or unsatisfied rule(s): ${skippedRules.join(", ")}\n`,
+          );
+        }
+
+        const out = renderOutput(opts.output, findings);
+        process.stdout.write(out + "\n");
+
+        const hasErrors = findings.some((f) => f.severity === "error");
+        process.exit(hasErrors ? 1 : 0);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`prisma-zod-consistency: ${message}\n`);
+        process.exit(2);
       }
-
-      const out = renderOutput(opts.output, findings);
-      process.stdout.write(out + "\n");
-
-      const hasErrors = findings.some((f) => f.severity === "error");
-      process.exit(hasErrors ? 1 : 0);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`prisma-zod-consistency: ${message}\n`);
-      process.exit(2);
-    }
-  });
+    },
+  );
 
 program
   .command("fix")

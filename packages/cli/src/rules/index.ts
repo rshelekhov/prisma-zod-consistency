@@ -9,6 +9,9 @@ import { r02 } from "./r02-onDelete.js";
 import { r03 } from "./r03-enum-sync.js";
 import { r04 } from "./r04-nullability.js";
 import { r05 } from "./r05-validated-bypass.js";
+import { r07 } from "./r07-redundant-indexes.js";
+import { r08 } from "./r08-unused-indexes.js";
+import { r09 } from "./r09-schema-drift-vs-db.js";
 
 const REGISTRY: Map<RuleId, Rule> = new Map([
   [r01.id, r01],
@@ -16,7 +19,13 @@ const REGISTRY: Map<RuleId, Rule> = new Map([
   [r03.id, r03],
   [r04.id, r04],
   [r05.id, r05],
+  [r07.id, r07],
+  [r08.id, r08],
+  [r09.id, r09],
 ]);
+
+/** Rules that require a live DB snapshot in the project context. */
+export const DB_RULES: ReadonlySet<RuleId> = new Set(["R07", "R08", "R09"]);
 
 export function getRule(id: RuleId): Rule | undefined {
   return REGISTRY.get(id);

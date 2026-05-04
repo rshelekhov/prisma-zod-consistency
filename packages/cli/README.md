@@ -33,6 +33,20 @@ pz-check
 pz-check --rules R01,R02,R03
 ```
 
+## Live DB mode (Group B)
+
+R07 (redundant indexes), R08 (unused indexes), and R09 (schema drift between `schema.prisma` and the actual database) need a live connection.
+
+```bash
+DATABASE_URL=postgres://... prisma-zod-consistency --rules R07,R08,R09 --db
+# or pass it explicitly:
+prisma-zod-consistency --rules R07,R08,R09 --db --database-url postgres://...
+```
+
+Without `--db`, R07/R08/R09 are silently skipped — `pz-check` always works without a database for the static rules.
+
+Currently Postgres only. MySQL/SQLite need their own dialect adapters.
+
 ## Auto-fix
 
 A subset of findings ship a mechanical, safe codemod that `pz-fix` can apply:
