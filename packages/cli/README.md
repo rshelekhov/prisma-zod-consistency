@@ -17,11 +17,20 @@ pnpm add -D prisma-zod-consistency
 
 ## Usage
 
+The package installs two equivalent binaries:
+
+- `prisma-zod-consistency` — the canonical name (use in CI scripts and docs).
+- `pz-check` — short alias for interactive use.
+
 ```bash
-pz-check                       # run default rules against current project
-pz-check --rules R01,R02,R03   # run a subset
-pz-check --output json         # machine-readable
-pz-check --output sarif        # for GitHub Code Scanning (Phase 2)
+prisma-zod-consistency                      # run default rules against current project
+prisma-zod-consistency --rules R01,R02,R03  # run a subset
+prisma-zod-consistency --output json        # machine-readable
+prisma-zod-consistency --output sarif       # for GitHub Code Scanning (Phase 2)
+
+# Equivalent shorthand:
+pz-check
+pz-check --rules R01,R02,R03
 ```
 
 ## Configuration

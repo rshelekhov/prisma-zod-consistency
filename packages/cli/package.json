@@ -19,6 +19,7 @@
     "node": ">=20"
   },
   "bin": {
+    "prisma-zod-consistency": "./dist/index.js",
     "pz-check": "./dist/index.js"
   },
   "main": "./dist/index.js",

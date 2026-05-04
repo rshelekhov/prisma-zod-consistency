@@ -8,12 +8,14 @@ import { r01 } from "./r01-zod-prisma-drift.js";
 import { r02 } from "./r02-onDelete.js";
 import { r03 } from "./r03-enum-sync.js";
 import { r04 } from "./r04-nullability.js";
+import { r05 } from "./r05-validated-bypass.js";
 
 const REGISTRY: Map<RuleId, Rule> = new Map([
   [r01.id, r01],
   [r02.id, r02],
   [r03.id, r03],
   [r04.id, r04],
+  [r05.id, r05],
 ]);
 
 export function getRule(id: RuleId): Rule | undefined {
