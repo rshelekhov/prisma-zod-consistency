@@ -25,6 +25,11 @@ interface R08Config {
 
 export const r08: Rule = {
   id: "R08",
+  name: "Unused indexes",
+  description:
+    "Reports indexes that pg_stat_user_indexes shows have never been scanned despite the parent table doing meaningful work.",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R08-unused-indexes.md",
   defaultSeverity: "info",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {

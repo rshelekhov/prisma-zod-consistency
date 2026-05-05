@@ -13,7 +13,8 @@
       "**/coverage/**",
       "packages/checks/examples/**",
       "packages/skill-claude-code/**",
-      "packages/skill-codex/**"
+      "packages/skill-codex/**",
+      "**/tests/fixtures/**"
     ]
   },
   "organizeImports": {

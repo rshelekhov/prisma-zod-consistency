@@ -99,7 +99,7 @@ webhookRoute.post("/square", async (c) => {
 });
 ```
 
-For the webhook case: confirm the endpoint is signature-verified (or otherwise authenticated by a different mechanism), then add it to `R05.excludeFiles` or suppress with a `// pz-disable-next-line R05` comment (planned syntax).
+For the webhook case: confirm the endpoint is signature-verified (or otherwise authenticated by a different mechanism), then add it to `R05.excludeFiles` or suppress with a `// pz-disable-next-line R05` comment (see [Suppression](#suppression) below).
 
 ### Validator wrapper file (auto-skipped)
 
@@ -132,6 +132,33 @@ The presence of `from "@hono/zod-validator"` in the file's imports tells R05 thi
 ```
 
 `framework: "auto"` checks for `import ... from "hono"` in any source file before activating the Hono detector. Set to `"hono"` to force-on, or `"off"` to disable the rule entirely.
+
+## Suppression
+
+R05 findings can be silenced inline with comment directives. The canonical use case is signature-verified webhooks where reading `c.req.json()` directly is correct:
+
+```typescript
+// pz-disable-next-line R05
+const event = await c.req.json(); // signature already verified above
+```
+
+Block form, useful for whole-file webhook handlers:
+
+```typescript
+// pz-disable R05
+// ... handler that legitimately bypasses Zod validation ...
+// pz-enable R05
+```
+
+Wildcards, multi-rule lists, and trailing reasons in `-- ` style are also supported — see [packages/cli/README.md](../../cli/README.md#suppression-comments) for the full grammar.
+
+For excluding entire directories (e.g. `webhooks/`) without per-line comments, prefer `R05.excludeFiles` in your config — that's a coarser knob with the same outcome and avoids comment-noise across many handlers.
+
+To hard-gate R05 (no suppression honoured, every finding always reported), set in your config:
+
+```jsonc
+{ "R05": { "suppressionsEnabled": false } }
+```
 
 ## Common false positives
 

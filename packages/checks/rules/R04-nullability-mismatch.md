@@ -113,6 +113,31 @@ export const updateUserSchema = z.object({
 
 `ignoreSchemaSuffixes`: skip schemas whose name ends with one of these. Useful when your team relaxes nullability everywhere in Update/Patch shapes and you don't want the noise. Be careful — this also disables direction-A checks for those schemas, which can hide real bugs in PATCH responses.
 
+## Suppression
+
+R04 findings inside TS/TSX source files can be silenced inline with comment directives. The most common use case is one-off PATCH endpoints where you've reviewed the nullability divergence and accepted it.
+
+```typescript
+// pz-disable-next-line R04
+email: z.string().nullable(), // PATCH-style: null means "clear this value"
+```
+
+Block form:
+
+```typescript
+// pz-disable R04
+// ... code that would normally fire R04 ...
+// pz-enable R04
+```
+
+Wildcards, multi-rule lists, and trailing reasons in `-- ` style are also supported — see [packages/cli/README.md](../../cli/README.md#suppression-comments) for the full grammar.
+
+To hard-gate R04 (no suppression honoured, every finding always reported), set in your config:
+
+```jsonc
+{ "R04": { "suppressionsEnabled": false } }
+```
+
 ## Common false positives
 
 - **PATCH endpoints made permissive intentionally.** Some teams type every field on every Update schema as `.nullable().optional()` regardless of the underlying Prisma column, to allow "set to null", "leave alone", or "set to value". This produces real direction-B findings on the required Prisma fields. If that's your policy, configure `ignoreSchemaSuffixes: ["Update", "Patch"]` and accept that nullability won't be checked there.

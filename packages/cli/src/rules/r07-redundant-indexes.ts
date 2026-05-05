@@ -19,6 +19,11 @@ import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
 export const r07: Rule = {
   id: "R07",
+  name: "Redundant indexes",
+  description:
+    "Reports indexes whose leading column list is a strict prefix of another index on the same table (Postgres only).",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R07-redundant-indexes.md",
   defaultSeverity: "info",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {

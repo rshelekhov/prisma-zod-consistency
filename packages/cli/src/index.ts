@@ -10,15 +10,17 @@ import { formatDiff } from "./fix/diff.js";
 import { formatJson } from "./output/json.js";
 import { formatPretty } from "./output/pretty.js";
 import { formatSarif } from "./output/sarif.js";
-import { run } from "./runner.js";
-import type { Finding, RuleId } from "./types.js";
+import { getRule } from "./rules/index.js";
+import { type RunResult, run } from "./runner.js";
+import type { Rule, RuleId } from "./types.js";
+import { VERSION } from "./version.js";
 
 const program = new Command();
 
 program
   .name("prisma-zod-consistency")
   .description("Consistency checks for Prisma + Zod + TypeScript stacks.")
-  .version("0.0.0");
+  .version(VERSION);
 
 program
   .command("check", { isDefault: true })
@@ -27,7 +29,7 @@ program
   .option("--rules <ids>", "Comma-separated rule ids to run (e.g. R01,R02)")
   .option(
     "--output <format>",
-    "Output format: pretty | json | sarif (sarif is Phase 2 placeholder)",
+    "Output format: pretty | json | sarif (SARIF 2.1.0 for GitHub Code Scanning)",
     "pretty",
   )
   .option("--db", "Enable Group B rules (R07/R08/R09) by snapshotting the live DB.", false)
@@ -45,23 +47,23 @@ program
           ? (opts.rules.split(",").map((s) => s.trim()) as RuleId[])
           : undefined;
 
-        const { findings, skippedRules } = await run({
+        const result = await run({
           cwd: opts.cwd,
           rules: ruleIds,
           db: opts.db,
           databaseUrl: opts.databaseUrl,
         });
 
-        if (skippedRules.length > 0 && opts.output === "pretty") {
+        if (result.skippedRules.length > 0 && opts.output === "pretty") {
           process.stderr.write(
-            `note: skipped unregistered or unsatisfied rule(s): ${skippedRules.join(", ")}\n`,
+            `note: skipped unregistered or unsatisfied rule(s): ${result.skippedRules.join(", ")}\n`,
           );
         }
 
-        const out = renderOutput(opts.output, findings);
+        const out = renderOutput(opts.output, result);
         process.stdout.write(`${out}\n`);
 
-        const hasErrors = findings.some((f) => f.severity === "error");
+        const hasErrors = result.findings.some((f) => f.severity === "error");
         process.exit(hasErrors ? 1 : 0);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -125,13 +127,17 @@ program.parseAsync(process.argv).catch((err: unknown) => {
   process.exit(2);
 });
 
-function renderOutput(format: string, findings: Finding[]): string {
+function renderOutput(format: string, result: RunResult): string {
   switch (format) {
     case "json":
-      return formatJson(findings);
-    case "sarif":
-      return formatSarif(findings);
+      return formatJson(result.findings);
+    case "sarif": {
+      const rules = result.ranRules
+        .map((id) => getRule(id))
+        .filter((r): r is Rule => r !== undefined);
+      return formatSarif(result.findings, { rootDir: result.rootDir, rules });
+    }
     default:
-      return formatPretty(findings);
+      return formatPretty(result.findings);
   }
 }

@@ -16,7 +16,7 @@ It runs as a deterministic linter (suitable for CI), and ships with two AI-drive
 
 - Node.js 20+
 - A Prisma project (`schema.prisma` somewhere in your repo)
-- Zod schemas (hand-written, generated, or both — see [R01](../packages/checks/rules/R01-zod-prisma-drift.md) for what each mode means)
+- Zod schemas (hand-written, generated, or both — see [R01](../packages/checks/rules/R01-zod-prisma-field-drift.md) for what each mode means)
 
 ## 1. Try it without installing
 
@@ -107,6 +107,22 @@ Minimal example:
 
 Per-rule options live in the rule specs at [`packages/checks/rules/`](../packages/checks/rules).
 
+### Silence individual findings without disabling a rule
+
+When a finding is intentional (e.g. legacy DTO shape, signature-verified webhook), drop a suppression comment in the source instead of editing config:
+
+```typescript
+// pz-disable-next-line R03
+status: z.string(), // legacy public API contract — enum drift is intentional
+
+// Block form, until pz-enable or end of file:
+// pz-disable R05
+webhookHandler.post("/square", async (c) => { ... });
+// pz-enable R05
+```
+
+Works in TS/TSX files for R01, R03, R04, R05. Full grammar (wildcards, multi-rule lists, eslint-style trailing reasons) is in the [CLI README](../packages/cli/README.md#suppression-comments).
+
 ## 5. Auto-fix the safe subset
 
 For two rules (R01 and R03) the fix is mechanical and safe to apply:
@@ -166,6 +182,23 @@ For Group B you typically want a separate job that has DB access:
       prisma-zod-consistency --rules R07,R08,R09 --db --output json \
       > pzc-db-findings.json
 ```
+
+### Surface findings in GitHub Code Scanning (SARIF)
+
+For inline PR annotations and a Security-tab dashboard, emit SARIF and upload via the codeql-action:
+
+```yaml
+- name: Prisma+Zod consistency
+  run: pnpm exec prisma-zod-consistency --output sarif > pzc.sarif
+
+- name: Upload SARIF to Code Scanning
+  if: always()
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: pzc.sarif
+```
+
+Findings then show up as line annotations on PRs, with each rule's spec linked from its `helpUri`. Severity maps as `error`→`error`, `warning`→`warning`, `info`→`note`.
 
 ## 8. Where to go from here
 

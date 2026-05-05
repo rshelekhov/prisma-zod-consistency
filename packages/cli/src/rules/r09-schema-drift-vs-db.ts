@@ -37,6 +37,11 @@ interface R09Config {
 
 export const r09: Rule = {
   id: "R09",
+  name: "Schema drift vs live DB",
+  description:
+    "Compares the Prisma model registry against information_schema.columns and flags missing columns, extra columns, and nullability drift.",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R09-schema-drift-vs-db.md",
   defaultSeverity: "warning",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {

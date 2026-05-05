@@ -44,6 +44,11 @@ interface R04Config {
 
 export const r04: Rule = {
   id: "R04",
+  name: "Nullability mismatch",
+  description:
+    "Flags nullability differences between Prisma model fields and Zod schemas (Prisma optional vs Zod strict, or Prisma required vs Zod nullable).",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R04-nullability-mismatch.md",
   defaultSeverity: "error",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {

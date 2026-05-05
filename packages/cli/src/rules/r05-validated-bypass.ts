@@ -43,6 +43,11 @@ const VALIDATOR_IMPORT_HINTS = ["@hono/zod-validator"];
 
 export const r05: Rule = {
   id: "R05",
+  name: "API boundary bypass",
+  description:
+    "Detects request handlers that read body/query/param data without going through a Zod-validated middleware (Hono detector in this iteration).",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R05-validated-bypass.md",
   defaultSeverity: "warning",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {

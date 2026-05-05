@@ -20,6 +20,11 @@ interface R02Config {
 
 export const r02: Rule = {
   id: "R02",
+  name: "@relation without explicit onDelete",
+  description:
+    "Flags Prisma @relation declarations that omit an explicit onDelete (and optionally onUpdate) action.",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R02-onDelete-explicit.md",
   defaultSeverity: "warning",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {

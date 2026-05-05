@@ -104,6 +104,31 @@ export const managerSettableStatusSchema = z.enum([
 }
 ```
 
+## Suppression
+
+R03 findings inside TS/TSX source files can be silenced inline with comment directives. Useful when a `z.string()` field is intentionally untyped against a Prisma enum (legacy DTO shape, public-API stability, etc.).
+
+```typescript
+// pz-disable-next-line R03
+status: z.string(), // legacy public API — enum drift acknowledged
+```
+
+Block form:
+
+```typescript
+// pz-disable R03
+// ... code that would normally fire R03 ...
+// pz-enable R03
+```
+
+Wildcards, multi-rule lists, and trailing reasons in `-- ` style are also supported — see [packages/cli/README.md](../../cli/README.md#suppression-comments) for the full grammar.
+
+To hard-gate R03 (no suppression honoured, every finding always reported), set in your config:
+
+```jsonc
+{ "R03": { "suppressionsEnabled": false } }
+```
+
 ## Common false positives
 
 - **`z.string()` instead of enum is *sometimes* intentional.** If a DTO is meant to be public-API-consumable and the team prefers permissive typing on the wire (because enum values may evolve and they don't want every consumer to break on a new value), they may type the field as `z.string()` deliberately. This is unusual but happens. Acceptable but should be documented; flagging it as `info` rather than `error` is a config option.

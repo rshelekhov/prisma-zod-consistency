@@ -33,6 +33,11 @@ interface R03Config {
 
 export const r03: Rule = {
   id: "R03",
+  name: "Enum sync (Prisma ↔ Zod)",
+  description:
+    "Detects drift between Prisma enums and their Zod counterparts (missing/extra values, case mismatch, enum-typed fields using non-enum Zod schemas).",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R03-enum-sync.md",
   defaultSeverity: "error",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {

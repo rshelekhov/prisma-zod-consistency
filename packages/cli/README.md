@@ -44,7 +44,7 @@ prisma-zod-consistency [check] [options]
 |---|---|---|
 | `--cwd <path>` | `process.cwd()` | Project root. Looks for `schema.prisma` at `<cwd>/prisma/schema.prisma` (overridable in config). |
 | `--rules <ids>` | all registered rules | Comma-separated subset, e.g. `R01,R03,R05`. Unknown rule ids are skipped with a stderr note. |
-| `--output <format>` | `pretty` | `pretty` (human) / `json` (machine) / `sarif` (Phase 2 placeholder, throws). |
+| `--output <format>` | `pretty` | `pretty` (human) / `json` (machine) / `sarif` (SARIF 2.1.0 for GitHub Code Scanning). |
 | `--db` | off | Snapshot the live database for Group B rules (R07/R08/R09). Without this flag, those rules are silently skipped. |
 | `--database-url <url>` | `process.env.DATABASE_URL` | Override `DATABASE_URL` for `--db`. |
 
@@ -141,7 +141,8 @@ Loaded via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — searche
 
     "R01": {
       "severity": "error",
-      "ignoreModels": ["AuditLog"]
+      "ignoreModels": ["AuditLog"],
+      "suppressionsEnabled": true            // honour `// pz-disable-next-line` comments (default)
     },
     "R02": {
       "severity": "warning",
@@ -207,7 +208,53 @@ For Group B in CI you typically want a separate job that has DB access:
       > pzc-db-findings.json
 ```
 
-SARIF output for GitHub Code Scanning is planned for Phase 2 (currently throws if requested).
+### SARIF output for GitHub Code Scanning
+
+```yaml
+- name: Prisma+Zod consistency
+  run: pnpm exec prisma-zod-consistency --output sarif > pzc.sarif
+
+- name: Upload SARIF
+  if: always()
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: pzc.sarif
+```
+
+Findings appear in the **Security** tab of the repo and as inline annotations on PRs. Severity maps as `error`→`error`, `warning`→`warning`, `info`→`note`. Each rule's `helpUri` points at its spec on GitHub. Live-DB findings (R07/R08/R09) emit a generic repository annotation (no file/line) since they're not anchored to source.
+
+## Suppression comments
+
+Silence individual findings in TS/TSX files without disabling the rule globally. Standard syntax (familiar from ESLint, Biome, prisma-lint):
+
+```typescript
+// pz-disable-next-line R03
+status: z.string(), // intentional: legacy public API contract
+
+// Multiple rules:
+// pz-disable-next-line R03,R04
+status: z.string().nullable(),
+
+// All rules on the next line:
+// pz-disable-next-line
+foo: z.unknown(),
+
+// Block form — silence from here until pz-enable (or end of file):
+// pz-disable R05
+webhookHandler.post("/square", async (c) => {
+  const body = await c.req.json(); // signature-verified webhook
+  // ...
+});
+// pz-enable R05
+
+// ESLint-style trailing reason is permitted and ignored:
+// pz-disable-next-line R03 -- legacy import we'll fix in Q3
+status: z.string(),
+```
+
+Scope: only TS/TSX files (R01, R03, R04, R05). Findings in `schema.prisma` (R02) and live-DB findings (R07/R08/R09) are not affected by these comments — Prisma's comment syntax differs and is not yet supported.
+
+To hard-gate a rule for compliance — ignore suppression comments entirely and always report — set `suppressionsEnabled: false` per rule in your config (see below).
 
 ## Rules
 

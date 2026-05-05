@@ -110,6 +110,31 @@ export const createUserInputSchema = UserSchema.pick({
 }
 ```
 
+## Suppression
+
+R01 findings inside TS/TSX source files can be silenced inline with comment directives. The syntax mirrors ESLint / Biome / prisma-lint:
+
+```typescript
+// pz-disable-next-line R01
+email: z.string(), // intentional: legacy column has no max length contract
+```
+
+Block form:
+
+```typescript
+// pz-disable R01
+// ... code that would normally fire R01 ...
+// pz-enable R01
+```
+
+Wildcards, multi-rule lists, and trailing reasons in `-- ` style are also supported — see [packages/cli/README.md](../../cli/README.md#suppression-comments) for the full grammar.
+
+To hard-gate R01 (no suppression honoured, every finding always reported), set in your config:
+
+```jsonc
+{ "R01": { "suppressionsEnabled": false } }
+```
+
 ## Common false positives
 
 - **DTO schemas that serialize `DateTime` as `string`.** Many projects shape their API responses so dates go over the wire as ISO strings. Prisma still reads them as `Date`, so the comparison `DateTime ↔ z.string()` looks like drift but is intentional. Suggest `z.string().datetime()` (still a string, but format-validated) or `z.coerce.date()` (parsed to Date) — either way the developer chose the trade-off, not a drift.

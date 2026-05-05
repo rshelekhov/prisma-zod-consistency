@@ -94,6 +94,15 @@ export type KnownZodGenerator = "zod-prisma-types" | "prisma-zod-generator" | "z
 /** A rule implementation. */
 export interface Rule {
   id: RuleId;
+  /** Short, human-readable rule name (used in SARIF tool.driver.rules[].name). */
+  name: string;
+  /**
+   * Single-sentence description of what the rule checks. Surfaces in SARIF
+   * tool.driver.rules[].shortDescription.text.
+   */
+  description: string;
+  /** Absolute URL to the canonical rule spec on GitHub. */
+  helpUri: string;
   defaultSeverity: Severity;
   /** Run the rule against the project context. May return zero or more findings. */
   run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]>;

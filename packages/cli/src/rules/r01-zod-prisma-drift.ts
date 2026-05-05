@@ -34,6 +34,11 @@ interface R01Config {
 
 export const r01: Rule = {
   id: "R01",
+  name: "Zod ↔ Prisma field drift",
+  description:
+    "Detects mismatches between Zod schema fields and the corresponding Prisma model fields (type, string length, integer constraints).",
+  helpUri:
+    "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R01-zod-prisma-field-drift.md",
   defaultSeverity: "error",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {
