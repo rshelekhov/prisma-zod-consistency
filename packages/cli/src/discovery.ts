@@ -10,7 +10,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { glob } from "tinyglobby";
 import type { ResolvedConfig } from "./config.js";
 import type { KnownZodGenerator, ProjectContext, ZodMode } from "./types.js";
@@ -40,13 +40,67 @@ export async function discover(config: ResolvedConfig): Promise<ProjectContext> 
     dot: false,
   });
 
+  const initialMode = detectZodMode(schemaSource);
+  const zodMode = await maybeUpgradeToHybrid(initialMode, {
+    schemaPath,
+    rootDir: config.rootDir,
+    sourceFiles,
+  });
+
   return {
     rootDir: config.rootDir,
     schemaPath,
     provider: detectProvider(schemaSource),
     sourceFiles,
-    zodMode: detectZodMode(schemaSource),
+    zodMode,
   };
+}
+
+/**
+ * `detectZodMode` reads only the Prisma schema, so it can't tell whether the
+ * project also has hand-written schemas alongside the generator output.
+ * After the source-file glob runs, we promote `generated` to `hybrid` if any
+ * scanned TS/TSX file outside the `outputDir` imports `zod` — meaning the
+ * project legitimately has both surfaces and R01c can fire.
+ */
+async function maybeUpgradeToHybrid(
+  mode: ZodMode,
+  args: { schemaPath: string; rootDir: string; sourceFiles: string[] },
+): Promise<ZodMode> {
+  if (mode.kind !== "generated") return mode;
+
+  const outputDirAbs = resolveOutputDir(mode.outputDir, args.schemaPath, args.rootDir);
+
+  for (const file of args.sourceFiles) {
+    if (isPathInside(file, outputDirAbs)) continue;
+    const source = await readFile(file, "utf8").catch(() => undefined);
+    if (source === undefined) continue;
+    if (/from\s+["']zod["']/.test(source)) {
+      return { kind: "hybrid", generator: mode.generator, outputDir: mode.outputDir };
+    }
+  }
+
+  return mode;
+}
+
+/**
+ * Generators write `output = "..."` relative to the `schema.prisma` file.
+ * Mirror Prisma's own behavior: relative paths anchor at the schema's
+ * directory, absolute paths are honored as-is.
+ */
+function resolveOutputDir(outputDir: string, schemaPath: string, rootDir: string): string {
+  if (isAbsolute(outputDir)) return outputDir;
+  if (outputDir.startsWith(".")) return resolve(dirname(schemaPath), outputDir);
+  // Bare paths (rare) fall back to project root.
+  return resolve(rootDir, outputDir);
+}
+
+function isPathInside(candidate: string, dir: string): boolean {
+  const c = resolve(candidate);
+  const d = resolve(dir);
+  if (c === d) return true;
+  const prefix = d.endsWith("/") ? d : `${d}/`;
+  return c.startsWith(prefix);
 }
 
 function detectProvider(schemaSource: string): ProjectContext["provider"] {

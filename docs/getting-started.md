@@ -28,7 +28,7 @@ That's it. From the root of your project, this:
 
 - Looks for `prisma/schema.prisma`
 - Looks for Zod schemas under `src/**/*.{ts,tsx}` (configurable)
-- Detects whether you use a Zod generator (e.g. `zod-prisma-types`) by reading `generator` blocks in `schema.prisma`
+- Detects whether you use a Zod generator (e.g. `zod-prisma-types`) by reading `generator` blocks in `schema.prisma`. R01 then runs in three coordinated sub-modes — R01a checks hand-written `z.object({...})` schemas against Prisma; R01b sanity-checks the generator's *output* against Prisma; R01c flags hand-written schemas that derive from generated ones (`UserSchema.passthrough()`, etc.) and weaken them
 - Runs all rules whose preconditions are met and prints findings
 
 If nothing's wrong, you get a clean exit. If there's drift, you get a report. **Exit code 0** means no `error`-severity findings. **Exit code 1** means at least one error — that's the CI gate.
@@ -137,7 +137,7 @@ prisma-zod-consistency fix --apply
 
 What gets fixed:
 
-- **R01** — appends `.max(N)` to Zod fields backed by `@db.VarChar(N)`, appends `.int()` for `Int` fields, lowers a too-loose `.max(M)`
+- **R01** (R01a only) — appends `.max(N)` to Zod fields backed by `@db.VarChar(N)`, appends `.int()` for `Int` fields, lowers a too-loose `.max(M)`. R01b/R01c findings stand on their own — generator output isn't auto-edited (regenerate it instead), and the right replacement for `.passthrough()` depends on intent
 - **R03** — replaces `z.string()` with `z.nativeEnum(EnumName)` when the Prisma field is an enum (auto-imports `EnumName` from `@prisma/client`)
 
 What is **not** auto-fixed:

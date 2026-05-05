@@ -1,32 +1,41 @@
 /**
  * R01 — Zod ↔ Prisma field drift.
  *
- * Scope of this iteration: R01a only (hand-written Zod, no generator
- * detected). Within R01a, we cover:
- *   - Type compatibility (String ↔ z.string(), Int ↔ z.number().int(), etc.)
- *   - @db.VarChar(N) ↔ .max(N) numeric comparison
+ * Three sub-modes, dispatched per-schema (not per-project) by
+ * `classifySchema`:
  *
- * Deferred to other rules / iterations:
- *   - Nullability (Prisma `?` ↔ .nullable()/.optional())   → R04
- *   - Enum field type drift                                → R03
- *   - R01b (generated only) and R01c (hybrid)              → next iteration
+ *   - R01a: hand-written `z.object({...})` → compare to Prisma model.
+ *   - R01b: schema declared inside the generator `outputDir` → sanity-check
+ *     generator config against Prisma.
+ *   - R01c: derived chain (`SomeSchema.passthrough()`, `.partial()`, etc.)
+ *     where `SomeSchema` resolves into `outputDir` → weakening check.
+ *
+ * Background on the per-schema dispatch design (vs picking a single mode
+ * for the whole project) lives in
+ * `project_r01_dispatch_design.md` and is summarized in the rule spec.
  *
  * See: packages/checks/rules/R01-zod-prisma-field-drift.md
  */
 
+import { dirname, isAbsolute, resolve } from "node:path";
 import {
   type FieldInfo,
   type PrismaModelRegistry,
   loadPrismaRegistry,
 } from "../schema/prisma-models.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
+import { classifySchema } from "../zod/classify.js";
 import {
-  type ZodChainCall,
-  type ZodField,
-  type ZodSchemaInfo,
-  discoverZodSchemas,
-} from "../zod/discover.js";
+  type LooseMaxIssue,
+  type MissingIntIssue,
+  type MissingMaxIssue,
+  type SchemaIssue,
+  compareModelToSchemaShape,
+} from "../zod/compare.js";
+import { type ZodSchemaInfo, discoverZodSchemas } from "../zod/discover.js";
+import { loadGeneratedRegistry } from "../zod/generated-registry.js";
 import { matchSchemasToModels } from "../zod/match.js";
+import { detectWeakening } from "../zod/weaken.js";
 
 interface R01Config {
   ignoreModels?: string[];
@@ -36,263 +45,278 @@ export const r01: Rule = {
   id: "R01",
   name: "Zod ↔ Prisma field drift",
   description:
-    "Detects mismatches between Zod schema fields and the corresponding Prisma model fields (type, string length, integer constraints).",
+    "Detects mismatches between Zod schema fields and the corresponding Prisma model fields (type, string length, integer constraints) for hand-written, generated, and hybrid Zod setups.",
   helpUri:
     "https://github.com/rshelekhov/prisma-zod-consistency/blob/main/packages/checks/rules/R01-zod-prisma-field-drift.md",
   defaultSeverity: "error",
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {
-    if (ctx.zodMode.kind !== "hand-written") {
-      // R01b and R01c land in a later iteration; no-op for now so the rule
-      // doesn't false-positive on generated schemas.
-      return [];
-    }
-
     const config = options.config as R01Config;
     const ignoreModels = new Set(config.ignoreModels ?? []);
 
     const registry = await loadPrismaRegistry(ctx.schemaPath);
-    const zodSchemas = await discoverZodSchemas(ctx.sourceFiles);
-    const matches = matchSchemasToModels(zodSchemas, registry);
-
     const findings: Finding[] = [];
-    for (const match of matches) {
-      if (ignoreModels.has(match.modelName)) continue;
-      const model = registry.models.get(match.modelName);
-      if (!model) continue;
-      findings.push(...compareModelToSchema(model.fields, match.zod, registry, options));
+
+    const outputDirAbs = resolveOutputDir(ctx);
+    const generatedRegistry =
+      outputDirAbs !== undefined
+        ? await loadGeneratedRegistry(ctx.zodMode, outputDirAbs, registry.models.keys())
+        : undefined;
+
+    // Discover user schemas with the generator output loaded as resolution
+    // context — so derived chains can trace base identifiers across barrels.
+    const generatedFiles = generatedRegistry?.files ?? [];
+    const userSchemas = await discoverZodSchemas({
+      files: ctx.sourceFiles,
+      ...(generatedFiles.length > 0 ? { resolutionContext: generatedFiles } : {}),
+      ...(outputDirAbs ? { outputDir: outputDirAbs } : {}),
+    });
+
+    // R01a / R01c — iterate user schemas, dispatch per-schema.
+    const objectMatches = matchSchemasToModels(
+      userSchemas.filter((s) => s.shape.kind === "object"),
+      registry,
+    );
+    const modelByName = new Map(objectMatches.map((m) => [m.zod.name, m.modelName]));
+
+    for (const schema of userSchemas) {
+      const classification = classifySchema(schema, {
+        ...(outputDirAbs ? { outputDir: outputDirAbs } : {}),
+      });
+
+      if (classification === "r01a") {
+        const modelName = modelByName.get(schema.name);
+        if (!modelName) continue;
+        if (ignoreModels.has(modelName)) continue;
+        const model = registry.models.get(modelName);
+        if (!model) continue;
+        const issues = compareModelToSchemaShape(model.fields, schema, registry);
+        for (const issue of issues) {
+          findings.push(formatR01aFinding(issue, options));
+        }
+      } else if (classification === "r01c") {
+        if (schema.shape.kind !== "derived" || !schema.shape.origin) continue;
+        const weak = detectWeakening(schema);
+        for (const issue of weak) {
+          findings.push(formatR01cFinding(issue, options));
+        }
+      }
+      // r01b is handled below over generated schemas, not user schemas.
+      // skip — no finding.
     }
+
+    // R01b — iterate generated model schemas (declared inside outputDir).
+    if (generatedRegistry) {
+      for (const [modelName, schema] of generatedRegistry.modelSchemas) {
+        if (ignoreModels.has(modelName)) continue;
+        const model = registry.models.get(modelName);
+        if (!model) continue;
+        const issues = compareModelToSchemaShape(model.fields, schema, registry);
+        for (const issue of issues) {
+          findings.push(formatR01bFinding(issue, options, generatedRegistry.generator));
+        }
+      }
+    }
+
     return findings;
   },
 };
 
-function compareModelToSchema(
-  fields: FieldInfo[],
-  zod: ZodSchemaInfo,
-  registry: PrismaModelRegistry,
-  options: RuleOptions,
-): Finding[] {
-  if (zod.shape.kind !== "object") return [];
+/**
+ * R01a finding: hand-written Zod drifted from Prisma. Severity from options
+ * (typically `error`), and we attach `pz-fix` edits where safe.
+ */
+function formatR01aFinding(issue: SchemaIssue, options: RuleOptions): Finding {
+  const { prismaField, zodField, zod } = issue;
+  const base = {
+    ruleId: "R01" as const,
+    severity: options.severity,
+    location: { file: zod.file, line: zodField.line },
+    scope: { model: zod.name, field: prismaField.name },
+  };
 
-  const findings: Finding[] = [];
-  const zodByName = new Map(zod.shape.fields.map((f) => [f.name, f]));
-
-  for (const prismaField of fields) {
-    if (isRelationField(prismaField, registry)) continue;
-    if (registry.enums.has(prismaField.type)) continue; // R03 territory
-    const zodField = zodByName.get(prismaField.name);
-    if (!zodField) continue; // schema may legitimately omit fields (DTO subset)
-
-    findings.push(...checkTypeCompatibility(prismaField, zodField, zod, options));
-    findings.push(...checkVarcharMax(prismaField, zodField, zod, options));
-  }
-
-  return findings;
-}
-
-function isRelationField(field: FieldInfo, registry: PrismaModelRegistry): boolean {
-  if (registry.models.has(field.type)) return true;
-  return field.attributes.some((attr) => attr.name === "relation");
-}
-
-function checkTypeCompatibility(
-  prismaField: FieldInfo,
-  zodField: ZodField,
-  zod: ZodSchemaInfo,
-  options: RuleOptions,
-): Finding[] {
-  // Prisma array fields (`String[]`, `Int[]`, etc.) must be `z.array(...)` on the Zod side.
-  // We don't yet recurse into the array element type; that lands with R01 v2.
-  if (prismaField.isArray) {
-    if (zodField.baseType !== "array") {
-      return [
-        {
-          ruleId: "R01",
-          severity: options.severity,
-          message: `Field \`${prismaField.name}\` is \`${prismaField.type}[]\` in Prisma but \`z.${zodField.baseType}()\` in \`${zod.name}\`.`,
-          location: { file: zod.file, line: zodField.line },
-          suggestion: `Use \`z.array(z.${expectedZodBaseTypes(prismaField.type)[0] ?? "unknown"}())\` to match the Prisma array type.`,
-          scope: { model: matchedModelName(zod), field: prismaField.name },
-        },
-      ];
-    }
-    return [];
-  }
-
-  const expected = expectedZodBaseTypes(prismaField.type);
-  if (expected.length === 0) return []; // unknown Prisma scalar — don't false-positive
-
-  const actual = zodField.baseType;
-  if (!expected.includes(actual)) {
-    return [
-      {
-        ruleId: "R01",
-        severity: options.severity,
-        message: `Field \`${prismaField.name}\` is \`${prismaField.type}\` in Prisma but \`z.${actual}()\` in \`${zod.name}\`.`,
-        location: { file: zod.file, line: zodField.line },
-        suggestion: `Use ${expected.map((t) => `\`z.${t}()\``).join(" or ")} to match the Prisma type.`,
-        scope: { model: matchedModelName(zod), field: prismaField.name },
-      },
-    ];
-  }
-
-  // Int requires .int() to reject non-integer numerics.
-  if (prismaField.type === "Int" && !hasChainCall(zodField.chain, "int")) {
-    const insertPos = insertBeforeNullishModifiers(zodField);
-    return [
-      {
-        ruleId: "R01",
-        severity: options.severity,
+  switch (issue.kind) {
+    case "type-mismatch":
+      return {
+        ...base,
+        message: `Field \`${prismaField.name}\` is \`${prismaField.type}\` in Prisma but \`z.${issue.actual}()\` in \`${zod.name}\`.`,
+        suggestion: `Use ${issue.expected.map((t) => `\`z.${t}()\``).join(" or ")} to match the Prisma type.`,
+      };
+    case "array-mismatch":
+      return {
+        ...base,
+        message: `Field \`${prismaField.name}\` is \`${prismaField.type}[]\` in Prisma but \`z.${issue.actual}()\` in \`${zod.name}\`.`,
+        suggestion: `Use \`z.array(z.${issue.expectedInner[0] ?? "unknown"}())\` to match the Prisma array type.`,
+      };
+    case "missing-int":
+      return {
+        ...base,
         message: `Field \`${prismaField.name}\` is \`Int\` in Prisma but the Zod schema in \`${zod.name}\` uses \`z.number()\` without \`.int()\`.`,
-        location: { file: zod.file, line: zodField.line },
         suggestion: "Add `.int()` to the chain so non-integer numerics are rejected.",
-        fix: {
-          description: `Append .int() to ${zod.name}.${prismaField.name}`,
-          edits: [
-            {
-              file: zod.file,
-              start: insertPos,
-              end: insertPos,
-              newText: ".int()",
-            },
-          ],
-        },
-        scope: { model: matchedModelName(zod), field: prismaField.name },
-      },
-    ];
+        fix: insertEditFix(issue, `Append .int() to ${zod.name}.${prismaField.name}`, ".int()"),
+      };
+    case "missing-max":
+      return {
+        ...base,
+        message: `Field \`${prismaField.name}\` is \`@db.${issue.dbKind}(${issue.dbSize})\` in Prisma; \`${zod.name}\` has no \`.max()\` to enforce that limit.`,
+        suggestion: `Add \`.max(${issue.dbSize})\` to \`${zodField.name}\`.`,
+        fix: insertEditFix(
+          issue,
+          `Append .max(${issue.dbSize}) to ${zod.name}.${prismaField.name}`,
+          `.max(${issue.dbSize})`,
+        ),
+      };
+    case "loose-max":
+      return {
+        ...base,
+        message: `Field \`${prismaField.name}\` allows \`.max(${issue.zodMax})\` in Zod but the database is \`@db.${issue.dbKind}(${issue.dbSize})\`.`,
+        suggestion: `Lower the Zod \`.max()\` to \`${issue.dbSize}\` (or relax the Prisma column).`,
+        ...looseMaxFix(issue),
+      };
   }
-
-  return [];
-}
-
-function checkVarcharMax(
-  prismaField: FieldInfo,
-  zodField: ZodField,
-  zod: ZodSchemaInfo,
-  options: RuleOptions,
-): Finding[] {
-  const dbSize = prismaField.dbAttribute?.size;
-  const dbKind = prismaField.dbAttribute?.kind;
-  if (!dbSize || !isVarcharLike(dbKind)) return [];
-
-  const zodMax = readMaxConstraint(zodField.chain);
-  if (zodMax === undefined) {
-    const insertPos = insertBeforeNullishModifiers(zodField);
-    return [
-      {
-        ruleId: "R01",
-        severity: options.severity,
-        message: `Field \`${prismaField.name}\` is \`@db.${dbKind}(${dbSize})\` in Prisma; \`${zod.name}\` has no \`.max()\` to enforce that limit.`,
-        location: { file: zod.file, line: zodField.line },
-        suggestion: `Add \`.max(${dbSize})\` to \`${zodField.name}\`.`,
-        fix: {
-          description: `Append .max(${dbSize}) to ${zod.name}.${prismaField.name}`,
-          edits: [
-            {
-              file: zod.file,
-              start: insertPos,
-              end: insertPos,
-              newText: `.max(${dbSize})`,
-            },
-          ],
-        },
-        scope: { model: matchedModelName(zod), field: prismaField.name },
-      },
-    ];
-  }
-
-  if (zodMax > dbSize) {
-    const maxArgRange = findMaxArgRange(zodField);
-    const fixObj = maxArgRange
-      ? {
-          fix: {
-            description: `Lower .max(${zodMax}) to .max(${dbSize}) on ${zod.name}.${prismaField.name}`,
-            edits: [
-              {
-                file: zod.file,
-                start: maxArgRange.start,
-                end: maxArgRange.end,
-                newText: String(dbSize),
-              },
-            ],
-          },
-        }
-      : {};
-    return [
-      {
-        ruleId: "R01",
-        severity: options.severity,
-        message: `Field \`${prismaField.name}\` allows \`.max(${zodMax})\` in Zod but the database is \`@db.${dbKind}(${dbSize})\`.`,
-        location: { file: zod.file, line: zodField.line },
-        suggestion: `Lower the Zod \`.max()\` to \`${dbSize}\` (or relax the Prisma column).`,
-        ...fixObj,
-        scope: { model: matchedModelName(zod), field: prismaField.name },
-      },
-    ];
-  }
-
-  return [];
-}
-
-function findMaxArgRange(zodField: ZodField): { start: number; end: number } | undefined {
-  const max = zodField.chain.find((c) => c.name === "max");
-  if (!max) return undefined;
-  return max.argRanges?.[0];
 }
 
 /**
- * Returns the source offset where a constraint like `.int()` or `.max(N)` should
- * be inserted so it sits *before* any `.nullable()` / `.optional()` / `.nullish()`
- * modifier. If no such modifier is present, falls back to the end of the
- * expression. This matters because `z.number().nullable().int()` reads
- * awkwardly and `.int()` should be applied to the value, not the union.
+ * R01b finding: generator output drifted from Prisma. Different message,
+ * lower default severity (warning), and *no* fix attached — the user can't
+ * auto-edit a regenerated file. The actionable change lives in the
+ * generator config (e.g. `@zod.string.max(N)` annotation) or in the Prisma
+ * schema itself; we point at both as suggestions.
  */
-function insertBeforeNullishModifiers(zodField: ZodField): number {
-  const NULLISH = new Set(["nullable", "optional", "nullish"]);
-  const first = zodField.chain.find((c) => NULLISH.has(c.name));
-  return first?.callStart ?? zodField.exprEnd;
-}
+function formatR01bFinding(issue: SchemaIssue, options: RuleOptions, generator: string): Finding {
+  const { prismaField, zodField, zod } = issue;
+  // R01b severity defaults to warning when the host rule's severity is `error`,
+  // because much of what we flag here is generator config (intentional
+  // narrowing), not a real bug. When the user explicitly raised severity to
+  // error in config, honor that.
+  const severity = options.severity === "error" ? "warning" : options.severity;
 
-function expectedZodBaseTypes(prismaType: string): string[] {
-  switch (prismaType) {
-    case "String":
-      return ["string", "coerce.string"];
-    case "Int":
-    case "Float":
-    case "Decimal":
-      return ["number", "coerce.number"];
-    case "BigInt":
-      return ["bigint", "coerce.bigint"];
-    case "Boolean":
-      return ["boolean", "coerce.boolean"];
-    case "DateTime":
-      return ["date", "coerce.date"];
-    case "Json":
-      return ["any", "unknown", "record", "lazy"];
-    default:
-      return []; // Bytes and others — unsupported in this iteration
+  const base = {
+    ruleId: "R01" as const,
+    severity,
+    location: { file: zod.file, line: zodField.line },
+    scope: { model: zod.name, field: prismaField.name },
+  };
+  const generatorTag = `(${generator})`;
+
+  switch (issue.kind) {
+    case "type-mismatch":
+      return {
+        ...base,
+        message: `Generated schema \`${zod.name}\` ${generatorTag} field \`${prismaField.name}\` is \`z.${issue.actual}()\`, but Prisma declares \`${prismaField.type}\`.`,
+        suggestion: `Review your generator config (\`@zod.import\`/\`@zod.custom.*\`) — the emitted type doesn't match Prisma's \`${prismaField.type}\`.`,
+      };
+    case "array-mismatch":
+      return {
+        ...base,
+        message: `Generated schema \`${zod.name}\` ${generatorTag} field \`${prismaField.name}\` is \`z.${issue.actual}()\`, but Prisma declares \`${prismaField.type}[]\`.`,
+        suggestion: "Verify the generator emitted `z.array(...)` for this field.",
+      };
+    case "missing-int":
+      return {
+        ...base,
+        message: `Generated schema \`${zod.name}\` ${generatorTag} field \`${prismaField.name}\` is \`z.number()\` without \`.int()\`, but Prisma declares \`Int\`.`,
+        suggestion:
+          "Some generators omit `.int()` by default. Check your generator config or pin to a version that emits it.",
+      };
+    case "missing-max":
+      return {
+        ...base,
+        message: `Generated schema \`${zod.name}\` ${generatorTag} field \`${prismaField.name}\` has no \`.max()\`, but Prisma declares \`@db.${issue.dbKind}(${issue.dbSize})\`.`,
+        suggestion: `Add a \`@zod.string.max(${issue.dbSize})\` annotation to the field in \`schema.prisma\`, or use a \`/// @zod\` import override.`,
+      };
+    case "loose-max":
+      return {
+        ...base,
+        message: `Generated schema \`${zod.name}\` ${generatorTag} field \`${prismaField.name}\` has \`.max(${issue.zodMax})\`, but Prisma declares \`@db.${issue.dbKind}(${issue.dbSize})\`.`,
+        suggestion: `Your \`@zod.string.max\` annotation contradicts the column size. Reconcile them — either tighten the annotation to ${issue.dbSize} or widen the column.`,
+      };
   }
 }
 
-function hasChainCall(chain: ZodChainCall[], name: string): boolean {
-  return chain.some((c) => c.name === name);
+/**
+ * R01c finding: derived schema weakens its generated origin.
+ */
+function formatR01cFinding(
+  issue: ReturnType<typeof detectWeakening>[number],
+  options: RuleOptions,
+): Finding {
+  const { zod, call } = issue;
+
+  if (issue.kind === "passthrough") {
+    return {
+      ruleId: "R01",
+      // `.passthrough()` on a generated origin is almost always a mistake —
+      // unknown keys flow through to prisma.create(). Always error,
+      // regardless of options.severity easing it elsewhere.
+      severity: options.severity === "info" ? "info" : "error",
+      message: `\`${zod.name}\` calls \`.passthrough()\` on \`${issue.originExportName}\`; unknown keys will flow into Prisma.`,
+      location: { file: zod.file, line: lineFromCallStart(zod, call.callStart) },
+      suggestion:
+        "Use `.pick({...})`, `.omit({...})`, or `.extend({...})` to deliberately shape the schema. `.passthrough()` lets through any field a caller sends.",
+      scope: { model: zod.name },
+    };
+  }
+
+  // nonstrict
+  return {
+    ruleId: "R01",
+    severity: options.severity,
+    message: `\`${zod.name}\` calls \`.nonstrict()\` on \`${issue.originExportName}\`, escaping the generator's strict-by-default contract.`,
+    location: { file: zod.file, line: lineFromCallStart(zod, call.callStart) },
+    suggestion:
+      "Drop `.nonstrict()` or replace it with an explicit `.strip()`/`.passthrough()` decision.",
+    scope: { model: zod.name },
+  };
 }
 
-function readMaxConstraint(chain: ZodChainCall[]): number | undefined {
-  const max = chain.find((c) => c.name === "max");
-  if (!max) return undefined;
-  const arg = max.args[0];
-  if (!arg) return undefined;
-  const parsed = Number.parseInt(arg.trim(), 10);
-  return Number.isNaN(parsed) ? undefined : parsed;
+function insertEditFix(
+  issue: MissingIntIssue | MissingMaxIssue,
+  description: string,
+  newText: string,
+): Finding["fix"] {
+  return {
+    description,
+    edits: [{ file: issue.zod.file, start: issue.insertPos, end: issue.insertPos, newText }],
+  };
 }
 
-function isVarcharLike(kind: string | undefined): boolean {
-  if (!kind) return false;
-  return kind === "VarChar" || kind === "Char" || kind === "NVarChar" || kind === "NChar";
+function looseMaxFix(issue: LooseMaxIssue): Pick<Finding, "fix"> {
+  if (!issue.maxArgRange) return {};
+  return {
+    fix: {
+      description: `Lower .max(${issue.zodMax}) to .max(${issue.dbSize}) on ${issue.zod.name}.${issue.prismaField.name}`,
+      edits: [
+        {
+          file: issue.zod.file,
+          start: issue.maxArgRange.start,
+          end: issue.maxArgRange.end,
+          newText: String(issue.dbSize),
+        },
+      ],
+    },
+  };
 }
 
-function matchedModelName(zod: ZodSchemaInfo): string | undefined {
-  // The schema name is the most useful scope hint we have without re-running the matcher.
-  return zod.name;
+function lineFromCallStart(zod: ZodSchemaInfo, _callStart: number): number {
+  // Falling back to the schema declaration line — call-site source maps
+  // require re-parsing the file, which we already did, but the SourceFile
+  // object isn't on the schema. Future improvement: track call line during
+  // discovery so suppression and SARIF anchor exactly at the offending line.
+  return zod.line;
 }
+
+/**
+ * Resolve the configured outputDir to an absolute path, mirroring Prisma's
+ * own anchoring rules: relative paths anchor at the schema directory.
+ */
+function resolveOutputDir(ctx: ProjectContext): string | undefined {
+  if (ctx.zodMode.kind === "hand-written") return undefined;
+  const od = ctx.zodMode.outputDir;
+  if (isAbsolute(od)) return od;
+  if (od.startsWith(".")) return resolve(dirname(ctx.schemaPath), od);
+  return resolve(ctx.rootDir, od);
+}
+
+// Exported for unused-import bookkeeping in case downstream tools want it.
+export type { FieldInfo, PrismaModelRegistry };

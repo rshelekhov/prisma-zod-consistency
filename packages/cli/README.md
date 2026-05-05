@@ -62,7 +62,7 @@ prisma-zod-consistency fix [options]
 
 What gets fixed (only the safe subset):
 
-- **R01**: appends `.max(N)` when `@db.VarChar(N)` and Zod has none, appends `.int()` for `Int` fields, lowers a looser `.max(M)` to match `@db.VarChar(N)`.
+- **R01** (R01a only — hand-written `z.object({...})`): appends `.max(N)` when `@db.VarChar(N)` and Zod has none, appends `.int()` for `Int` fields, lowers a looser `.max(M)` to match `@db.VarChar(N)`. R01b (generator output ↔ Prisma) and R01c (derived schemas weakening generated) emit findings but never apply mechanical fixes — the right change is in generator config or developer intent.
 - **R03**: replaces field-level `z.string()` (or other non-enum base) with `z.nativeEnum(EnumName)` when the Prisma field is an enum. Auto-imports `EnumName` from `@prisma/client` if missing.
 
 What is **not** auto-fixed (deliberately):
@@ -260,7 +260,7 @@ To hard-gate a rule for compliance — ignore suppression comments entirely and 
 
 | ID | Rule | Severity (default) | Surface | Auto-fix |
 |---|---|---|---|---|
-| R01 | Zod ↔ Prisma field drift | error | CLI + skill | partial |
+| R01 | Zod ↔ Prisma field drift (R01a / R01b / R01c) | error / warning | CLI + skill | partial |
 | R02 | `@relation` without explicit `onDelete` | warning | CLI + skill | — |
 | R03 | Enum sync (Prisma ↔ Zod) | error | CLI + skill | partial |
 | R04 | Nullability mismatch | error | CLI + skill | — |

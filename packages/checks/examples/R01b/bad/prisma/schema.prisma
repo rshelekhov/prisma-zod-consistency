@@ -1,0 +1,27 @@
+// Bad fixture for R01b: generator output drifts from Prisma in three ways.
+// The drift is what would happen if the user added a misconfigured
+// `@zod.string.max(50)` annotation on `email` (column is VarChar(255)),
+// pinned an old generator version that emits `z.number()` without `.int()`
+// for Int columns, and never re-ran `prisma generate` after widening the
+// `name` column to VarChar(100) (still emits `.max(50)`).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator zod {
+  provider = "zod-prisma-types"
+  output   = "../generated/zod"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id    String @id @default(cuid())
+  email String @unique @db.VarChar(255)
+  name  String @db.VarChar(100)
+  age   Int
+}

@@ -5,13 +5,22 @@
  * declarations (`export const x = z.object({...})` and similar), and parses
  * each into a structured `ZodSchemaInfo`.
  *
- * The output is intentionally narrow — we only capture what current rules
- * need (z.object field shapes + chained constraints, plus z.enum/z.nativeEnum
- * for R03). Unrecognized Zod constructs are surfaced as `{ kind: "other" }`
- * so rules can choose to skip them rather than crash.
+ * The output captures three shape kinds rules currently consume:
+ *   - `object` — `z.object({ ... })` root forms (R01a / R01b base case).
+ *   - `enum`   — `z.enum([...])` and `z.nativeEnum(X)` (R03).
+ *   - `derived` — chains rooted at a non-`z` identifier such as
+ *     `UserSchema.passthrough()` or `UserSchema.pick({...}).extend({...})`.
+ *     Used by R01c to detect weakening of generated schemas. When the root
+ *     identifier resolves (via ts-morph alias chains, transparently
+ *     traversing barrel re-exports and import aliasing) to a file inside
+ *     the Zod-generator `outputDir`, the resolved origin is attached.
+ *
+ * Unrecognized Zod constructs are surfaced as `{ kind: "other" }` so rules
+ * can choose to skip them rather than crash.
  */
 
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   type CallExpression,
   type Identifier,
@@ -20,6 +29,7 @@ import {
   Project,
   type PropertyAccessExpression,
   type SourceFile,
+  type Symbol as TsMorphSymbol,
   type VariableDeclaration,
 } from "ts-morph";
 
@@ -36,7 +46,22 @@ export interface ZodSchemaInfo {
 export type ZodShape =
   | { kind: "object"; fields: ZodField[] }
   | { kind: "enum"; values: string[]; nativeEnumName?: string }
+  | { kind: "derived"; baseIdentifier: string; origin?: DerivationOrigin; chain: ZodChainCall[] }
   | { kind: "other"; expression: string };
+
+/**
+ * The original generated schema a derived expression traces back to.
+ *
+ * Populated by `resolveOriginInGeneratedDir` when the chain's base identifier
+ * — after following ts-morph alias chains through any number of barrels and
+ * import aliases — points at a declaration inside the configured `outputDir`.
+ */
+export interface DerivationOrigin {
+  /** Absolute path to the source file inside outputDir where the origin schema is declared. */
+  file: string;
+  /** Exported name of the origin schema (e.g. "UserSchema"). */
+  exportName: string;
+}
 
 export interface ZodField {
   name: string;
@@ -91,8 +116,37 @@ export interface ZodChainCall {
   callEnd: number;
 }
 
-export async function discoverZodSchemas(files: string[]): Promise<ZodSchemaInfo[]> {
-  if (files.length === 0) return [];
+/**
+ * Options for `discoverZodSchemas`. The string-array form is preserved as
+ * a back-compat shorthand: `discoverZodSchemas(["a.ts", "b.ts"])` extracts
+ * schemas from those files with no cross-file resolution.
+ */
+export interface DiscoverZodOptions {
+  /** Files to extract schemas from. */
+  files: string[];
+  /**
+   * Additional files to load into the ts-morph Project so that derived-shape
+   * identifiers can be resolved across barrel re-exports and import aliases.
+   * Schemas are NOT extracted from these files — pass them through `files`
+   * if you want both sets in the result.
+   */
+  resolutionContext?: string[];
+  /**
+   * Absolute path to the Zod-generator `outputDir`. When set, derived chains
+   * whose base identifier ultimately resolves into this directory will have
+   * their `origin` populated.
+   */
+  outputDir?: string;
+}
+
+export async function discoverZodSchemas(
+  filesOrOptions: string[] | DiscoverZodOptions,
+): Promise<ZodSchemaInfo[]> {
+  const opts: DiscoverZodOptions = Array.isArray(filesOrOptions)
+    ? { files: filesOrOptions }
+    : filesOrOptions;
+
+  if (opts.files.length === 0) return [];
 
   const project = new Project({
     useInMemoryFileSystem: false,
@@ -100,16 +154,45 @@ export async function discoverZodSchemas(files: string[]): Promise<ZodSchemaInfo
     compilerOptions: { allowJs: false, noEmit: true },
   });
 
-  const schemas: ZodSchemaInfo[] = [];
+  // Load resolution-context files first so cross-file symbol lookups
+  // (alias chains through barrels, etc.) work when we walk the target files.
+  const contextFiles = uniquePaths(opts.resolutionContext ?? []);
+  for (const file of contextFiles) {
+    const source = await readFile(file, "utf8").catch(() => undefined);
+    if (source === undefined) continue;
+    project.createSourceFile(file, source, { overwrite: true });
+  }
 
-  for (const file of files) {
+  const schemas: ZodSchemaInfo[] = [];
+  const targetFiles = uniquePaths(opts.files);
+
+  for (const file of targetFiles) {
     const source = await readFile(file, "utf8");
-    if (!hasZodImport(source)) continue;
+    if (!hasZodImport(source) && !mentionsKnownDerivationBase(source)) continue;
     const sourceFile = project.createSourceFile(file, source, { overwrite: true });
-    schemas.push(...extractFromSourceFile(sourceFile));
+    schemas.push(...extractFromSourceFile(sourceFile, opts.outputDir));
   }
 
   return schemas;
+}
+
+function uniquePaths(files: string[]): string[] {
+  return Array.from(new Set(files));
+}
+
+/**
+ * Files that contain only derived schemas (no `import { z } from "zod"`)
+ * still need to be parsed — their root identifier will resolve through
+ * ts-morph into a generated schema. This heuristic catches the common case
+ * where a file imports a schema from a barrel and immediately calls a
+ * Zod chaining method on it. False positives just cost a parse.
+ */
+function mentionsKnownDerivationBase(source: string): boolean {
+  // Capital-led identifier followed by a dot and a method name common to
+  // derived chains. Cheap, lossy, intentional.
+  return /\b[A-Z][A-Za-z0-9_]*\.(passthrough|partial|pick|omit|extend|merge|strict|strip|nonstrict|nullable|optional|nullish|describe|brand|catch|default|refine|superRefine|transform|pipe)\s*\(/.test(
+    source,
+  );
 }
 
 function hasZodImport(source: string): boolean {
@@ -117,16 +200,25 @@ function hasZodImport(source: string): boolean {
   return /from\s+["']zod["']/.test(source);
 }
 
-function extractFromSourceFile(sourceFile: SourceFile): ZodSchemaInfo[] {
+function extractFromSourceFile(sourceFile: SourceFile, outputDir?: string): ZodSchemaInfo[] {
   const result: ZodSchemaInfo[] = [];
+  const normalizedOutputDir = outputDir ? resolve(outputDir) : undefined;
 
   for (const variable of sourceFile.getVariableDeclarations()) {
     const initializer = variable.getInitializer();
     if (!initializer) continue;
     if (!Node.isCallExpression(initializer)) continue;
-    if (!isZodChainRoot(initializer)) continue;
 
-    const shape = extractShape(initializer);
+    const root = chainRoot(initializer);
+    if (!root) continue;
+
+    let shape: ZodShape | undefined;
+    if (root.kind === "z") {
+      shape = extractShape(initializer);
+    } else if (root.kind === "identifier") {
+      shape = extractDerivedShape(initializer, root.identifier, normalizedOutputDir);
+    }
+
     if (shape) {
       result.push({
         name: variable.getName(),
@@ -140,8 +232,9 @@ function extractFromSourceFile(sourceFile: SourceFile): ZodSchemaInfo[] {
   return result;
 }
 
-function isZodChainRoot(call: CallExpression): boolean {
-  // True if the chain ultimately roots at the `z` identifier.
+type ChainRoot = { kind: "z" } | { kind: "identifier"; identifier: Identifier } | undefined;
+
+function chainRoot(call: CallExpression): ChainRoot {
   let cursor: Node = call;
   while (true) {
     if (Node.isCallExpression(cursor)) {
@@ -153,10 +246,16 @@ function isZodChainRoot(call: CallExpression): boolean {
       continue;
     }
     if (Node.isIdentifier(cursor)) {
-      return (cursor as Identifier).getText() === "z";
+      const id = cursor as Identifier;
+      if (id.getText() === "z") return { kind: "z" };
+      return { kind: "identifier", identifier: id };
     }
-    return false;
+    return undefined;
   }
+}
+
+function isZodChainRoot(call: CallExpression): boolean {
+  return chainRoot(call)?.kind === "z";
 }
 
 function extractShape(rootCall: CallExpression): ZodShape | undefined {
@@ -361,4 +460,91 @@ function baseTypePrefixLength(chain: ChainStep[]): number {
 
 function lineOf(node: Node | VariableDeclaration): number {
   return node.getSourceFile().getLineAndColumnAtPos(node.getStart()).line;
+}
+
+/**
+ * Extract a derived chain (`UserSchema.passthrough()`, `UserSchema.pick({...}).extend({...})`).
+ * If the base identifier resolves into `outputDir` via ts-morph alias chains,
+ * the resolved origin is attached.
+ */
+function extractDerivedShape(
+  rootCall: CallExpression,
+  baseIdentifier: Identifier,
+  outputDir: string | undefined,
+): ZodShape {
+  const steps = unwindChain(rootCall);
+  // The base identifier doesn't show up as a step in unwindChain (steps only
+  // capture .method() segments). All steps are post-base chain calls.
+  const chain: ZodChainCall[] = steps.map((c) => ({
+    name: c.method,
+    args: c.argTexts,
+    argRanges: c.argNodes.map((node) => ({ start: node.getStart(), end: node.getEnd() })),
+    callStart: c.callStart,
+    callEnd: c.callEnd,
+  }));
+
+  const result: ZodShape = {
+    kind: "derived",
+    baseIdentifier: baseIdentifier.getText(),
+    chain,
+  };
+
+  if (outputDir) {
+    const origin = resolveOriginInGeneratedDir(baseIdentifier, outputDir);
+    if (origin) {
+      return { ...result, origin };
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Walk the symbol's alias chain (transparently traversing `import { X } from`,
+ * `import { X as Y }`, `export { X } from`, `export * from`, etc.) and check
+ * whether the original declaration lives inside `outputDir`.
+ *
+ * Limitations:
+ *   - Dynamic CJS re-exports (`module.exports = { ...require(...) }`) are not
+ *     resolved — TypeScript's symbol resolution doesn't see them. Documented
+ *     as a known limitation in the R01 spec.
+ *   - Requires that all relevant files (target + intermediate barrels +
+ *     generated) are loaded into the same ts-morph Project. The caller is
+ *     responsible for that via `resolutionContext`.
+ */
+function resolveOriginInGeneratedDir(
+  identifier: Identifier,
+  outputDir: string,
+): DerivationOrigin | undefined {
+  const initial = identifier.getSymbol();
+  if (!initial) return undefined;
+  let symbol: TsMorphSymbol = initial;
+
+  // Cap the alias-chain walk at 16 hops as a paranoia bound — should never
+  // hit it on real codebases, but keeps a malformed graph from looping.
+  for (let i = 0; i < 16; i++) {
+    const aliased: TsMorphSymbol | undefined = symbol.getAliasedSymbol?.();
+    if (!aliased || aliased === symbol) break;
+    symbol = aliased;
+  }
+
+  const decls = symbol.getDeclarations?.() ?? [];
+  if (decls.length === 0) return undefined;
+
+  for (const decl of decls) {
+    const declFile = decl.getSourceFile().getFilePath();
+    if (isPathInside(declFile, outputDir)) {
+      return { file: declFile, exportName: symbol.getName() };
+    }
+  }
+  return undefined;
+}
+
+function isPathInside(candidate: string, dir: string): boolean {
+  const normalizedCandidate = resolve(candidate);
+  const normalizedDir = resolve(dir);
+  if (normalizedCandidate === normalizedDir) return true;
+  // Trailing separator avoids matching `/foo/barbar` against `/foo/bar`.
+  const prefix = normalizedDir.endsWith("/") ? normalizedDir : `${normalizedDir}/`;
+  return normalizedCandidate.startsWith(prefix);
 }

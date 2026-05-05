@@ -2,12 +2,12 @@
 
 | Field | Value |
 |---|---|
-| Severity (default) | error |
-| Phase | 1 (skill), 2 (CLI subset) |
+| Severity (default) | error (R01a, R01c-passthrough); warning (R01b, R01c-nonstrict) |
+| Phase | 1 (skill), 2 (CLI) |
 | Surface | CLI + skill |
 | Group | A (static) |
-| Auto-fix | partial — `.max(N)`, `.int()`, looser `.max(M)` |
-| Implementation | partial — R01a only; R01b/R01c deferred |
+| Auto-fix | partial — `.max(N)`, `.int()`, looser `.max(M)` (R01a only) |
+| Implementation | full — R01a, R01b, R01c all live in CLI |
 
 ## What it checks
 
@@ -17,19 +17,36 @@ For every model in `schema.prisma`, the corresponding Zod schema(s) must agree w
 - **Constraint propagation** — `@db.VarChar(N)` requires `.max(N)` on the Zod side; `@unique` on an email column suggests `.email()`; `Int` requires `.int()`.
 - **Required vs optional** — Prisma `String?` ↔ Zod `.nullable()`/`.optional()` (see also R04).
 
-The rule has three sub-modes selected automatically by the discovery phase.
+R01 has three sub-modes. Unlike many static analysis tools that pick one mode per project, the dispatch here is **per-schema**: each Zod schema declaration in the codebase is classified individually. A single file can legitimately host both an R01a schema and an R01c schema side by side, and the rule treats each according to its own form. See "Implementation notes" below for the rationale.
 
-### R01a — hand-written Zod only
+### R01a — hand-written `z.object({...})`
 
-When the project has **no Zod-generating Prisma generator** (no `zod-prisma-types`, `prisma-zod-generator`, or `zod-prisma`), every Zod schema in the project is compared directly to its corresponding Prisma model. This is the strictest mode and the most common drift hotspot.
+Any schema whose initializer starts with `z.object({...})` (or `z.enum(...)` / `z.nativeEnum(...)`) is compared directly to the matching Prisma model by [name match](../../cli/src/zod/match.ts). This works the same whether or not a Zod generator is configured — local hand-written schemas alongside generated output are still treated as R01a.
 
-### R01b — generated Zod only
+### R01b — generator output ↔ Prisma sanity check
 
-When the project uses a Zod generator and there are no hand-written overrides, R01 sanity-checks the generator configuration against the Prisma schema. Examples: missing `addInputTypeValidation`, custom `@zod` annotations that contradict Prisma constraints.
+Every schema declared **inside the configured generator `outputDir`** is compared to its corresponding Prisma model using the same field-walk as R01a. The intent is different: this isn't drift the user introduced, it's drift in the generator's *output* — typically caused by a misconfigured `@zod.string.max(N)` annotation in `schema.prisma`, a stale generator version, or a forgotten `prisma generate` after widening a column.
 
-### R01c — generated + custom (hybrid)
+R01b findings default to **warning** severity and never carry mechanical `pz-fix` edits — the user can't auto-edit a regenerated file. The actionable change lives in the generator config or in `schema.prisma` itself, and the suggestion text points there. Override with `R01.severity: "error"` in config to gate CI on generator-config drift.
 
-When both generated and hand-written Zod schemas exist, custom schemas must not **weaken** the generated ones. Allowed: `.partial()`, `.omit()`, `.extend()` (with stricter rules), `.pick()`. Flagged: `.passthrough()`, removing required fields without `.partial()`, replacing `.email()` with `.string()`, removing `.max()` constraints.
+The first-class generator is `zod-prisma-types` (`<Model>Schema` naming convention). `prisma-zod-generator` and `zod-prisma` are detected best-effort by their alternative model-schema naming.
+
+### R01c — derived hand-written schemas weakening generated
+
+Any chain rooted at a non-`z` identifier (`UserSchema.passthrough()`, `UserSchema.pick({...}).extend({...})`, etc.) where the **base identifier resolves into the generator `outputDir`** — directly or transitively through any number of barrel re-exports and `import { X as Y }` aliases — is checked for weakening calls.
+
+Currently flagged:
+
+- `.passthrough()` — defeats the validator entirely; unknown keys flow into `prisma.create()`. Severity: **error**.
+- `.nonstrict()` — alias for permissive parsing in older Zod releases. Severity: **warning**.
+
+Allowed (intentional narrowing, never flagged):
+
+- `.partial()`, `.pick({...})`, `.omit({...})`
+- `.extend({...})` (the result is structurally stricter even when fields overlap)
+- `.refine(...)`, `.transform(...)`, `.pipe(...)`, `.brand()`, `.describe(...)`, `.default(...)`, `.catch(...)`
+
+Note that **per-field `.email()` → `.string()` replacements inside `.extend({...})`** and equivalent re-narrowings are not yet detected — that requires diffing the inside of the extend payload against the generator's emitted shape, and is tracked as a follow-up. The single highest-value finding (`.passthrough()`) is in scope today.
 
 ## Why it matters
 
@@ -144,9 +161,12 @@ To hard-gate R01 (no suppression honoured, every finding always reported), set i
 
 ## Implementation notes
 
-- **Only R01a is implemented today.** R01b and R01c require detecting which symbols are exported from the Zod-generator output dir and checking that custom schemas reference them. Discovery already detects the Zod mode; the comparison logic for hybrid mode lands in a follow-up.
+- **Per-schema dispatch, not per-project.** Each Zod schema is independently classified as R01a / R01b / R01c / skip based on the *form* of its initializer expression and the *origin* of the identifiers it references. A single file can hold `userPublicSchema = z.object({...})` (R01a) and `createUserSchema = UserSchema.passthrough()` (R01c) side by side, and each finding is attributed to the right sub-mode. The alternative — picking one mode for the whole project — fails on real hybrid codebases where both patterns coexist.
+- **Path-based identifier resolution with transitive re-exports.** R01c does not rely on naming conventions to decide whether a derived chain bottoms out in generator output. It uses ts-morph's symbol alias chain, which transparently traverses `import { X as Y }`, `export { X } from "./..."`, and `export * from "./..."`. A `.passthrough()` reached through three barrels is still caught. Naming-based detection was rejected because it (a) gives false positives in hand-written projects with similar naming, and (b) misses generators with different naming conventions.
+- **Known limitations.** Dynamic CJS re-exports (`module.exports = { ...require(...) }`) are not resolved — TypeScript's symbol resolution doesn't see them. R01c also doesn't yet diff the inside of `.extend({...})` payloads to detect per-field weakening (e.g. replacing a generated `.email()` with a plain `.string()`); the immediate value is in catching `.passthrough()`.
+- **R01b severity default.** Findings on generator output default to `warning`, not `error`, because much of what they flag is intentional generator config (`@zod.string.max(N)` set deliberately tighter than the column). When stricter gating is desired, set `R01.severity: "error"` in config.
 - **Source location.** Field-level findings point at the Zod field's line. The `@db.*` constraint side is reported as "from Prisma" in the message but does not link to a `schema.prisma` line — `@mrleebo/prisma-ast` doesn't expose source positions on attributes by default.
-- **Codemod insertion order.** When the Zod chain already contains a `.nullable()` / `.optional()` / `.nullish()` modifier, `pz-fix` inserts new constraints (`.int()`, `.max(N)`) **before** that modifier, producing `z.number().int().nullable()` rather than `z.number().nullable().int()`. The semantic outcome is the same in current Zod, but the canonical order keeps the value-shape constraints adjacent to the base type.
+- **Codemod insertion order (R01a only).** When the Zod chain already contains a `.nullable()` / `.optional()` / `.nullish()` modifier, `pz-fix` inserts new constraints (`.int()`, `.max(N)`) **before** that modifier, producing `z.number().int().nullable()` rather than `z.number().nullable().int()`. The semantic outcome is the same in current Zod, but the canonical order keeps the value-shape constraints adjacent to the base type. R01b never emits fixes (regenerated file) and R01c does not (the right replacement for `.passthrough()` is intent-dependent).
 - **Array element types.** When a Prisma field is `String[]` and the Zod schema is `z.array(...)`, the rule confirms shape compatibility but does NOT recurse into the inner element type. So `String[] ↔ z.array(z.number())` would slip through. Tracked.
 - **Enum-typed Prisma fields.** Skipped here, handled by R03.
 - **Nullability.** Skipped here, handled by R04.

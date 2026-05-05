@@ -1,0 +1,22 @@
+// Good fixture for R01c: hand-written schemas legitimately narrow generated.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator zod {
+  provider = "zod-prisma-types"
+  output   = "../generated/zod"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String @id @default(cuid())
+  email        String @unique @db.VarChar(255)
+  name         String @db.VarChar(100)
+  passwordHash String
+}
