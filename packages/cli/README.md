@@ -160,7 +160,7 @@ Loaded via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — searche
     },
     "R05": {
       "severity": "warning",
-      "framework": "auto"           // hono | auto | off
+      "framework": "auto"           // hono | trpc | auto | off
     },
 
     // Group B (live DB)
@@ -264,7 +264,7 @@ To hard-gate a rule for compliance — ignore suppression comments entirely and 
 | R02 | `@relation` without explicit `onDelete` | warning | CLI + skill | — |
 | R03 | Enum sync (Prisma ↔ Zod) | error | CLI + skill | partial |
 | R04 | Nullability mismatch | error | CLI + skill | — |
-| R05 | API boundary bypass (Hono) | warning | CLI + skill | — |
+| R05 | API boundary bypass (Hono, tRPC) | warning | CLI + skill | — |
 | R06 | Missing index for `where`/`orderBy` | info | skill only | — |
 | R07 | Redundant indexes (DB) | info | CLI `--db` + skill | — |
 | R08 | Unused indexes (DB) | info | CLI `--db` + skill | — |

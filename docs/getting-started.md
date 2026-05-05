@@ -100,7 +100,7 @@ Minimal example:
 
   "rules": {
     "R02": { "severity": "warning", "requireOnUpdate": false },
-    "R05": { "severity": "warning", "framework": "hono" }
+    "R05": { "severity": "warning", "framework": "auto" }   // hono | trpc | auto | off
   }
 }
 ```

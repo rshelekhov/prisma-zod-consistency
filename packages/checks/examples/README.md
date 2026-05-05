@@ -19,7 +19,15 @@ examples/
 ├── R02/
 │   ├── bad/
 │   └── good/
+├── R05/
+│   ├── bad/         # Hono fixture
+│   ├── good/        # Hono fixture
+│   └── trpc/
+│       ├── bad/
+│       └── good/
 └── ...
 ```
+
+Multi-detector rules (currently only R05, which has separate Hono and tRPC walkers) keep one fixture per detector under a framework-named subfolder.
 
 Each fixture is a minimal, self-contained slice — schema + Zod + (optional) TS usage — small enough to read in one screen.

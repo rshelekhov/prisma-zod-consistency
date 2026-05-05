@@ -7,13 +7,20 @@
 | Surface | CLI + skill |
 | Group | A (static) |
 | Auto-fix | no — adding a validator middleware requires picking a Zod schema |
-| Implementation | done for Hono; tRPC/Next/Express/Fastify deferred |
+| Implementation | done for Hono and tRPC; Next/Express/Fastify/Nest deferred |
 
 ## What it checks
 
-Detects route handlers that read body data directly from the framework context instead of going through a Zod-validated middleware. Currently the rule has one detector — Hono. The intent is the same across frameworks: untyped/untrusted data should not flow from `request → service → prisma.create/update` without a Zod schema in between.
+Detects route handlers that accept untyped client input without going through a Zod-validated boundary. The rule is framework-aware and dispatches to per-framework walkers. The intent is the same across frameworks: untyped/untrusted data should not flow from `request → service → prisma.create/update` without a Zod schema in between.
 
 **Hono detector** finds calls of the form `<x>.req.json()`, `<x>.req.parseBody()`, or `<x>.req.formData()` — where `<x>` is the Hono context (typically `c`, `ctx`, or `context`). The wrapper-detection heuristic auto-skips files importing from `@hono/zod-validator`, since those files legitimately call `c.req.json()` inside the validator and re-expose it via `c.req.valid(...)`.
+
+**tRPC detector** is import-gated — only files that import from `@trpc/server` (or any `@trpc/server/...` subpath) are walked. Inside such a file, every `.query(handler)` or `.mutation(handler)` call is examined. A finding is emitted when:
+
+1. The handler accepts a parameter named `input` (or destructures `{ input }` from its first argument), AND
+2. The procedure chain has no `.input(...)` call before the `.query(...)` / `.mutation(...)`.
+
+`.input(z.void())`, `.input(z.undefined())`, and `.input(z.never())` count as explicit no-input declarations and are NOT flagged. Procedures whose handler takes no arguments at all (`.query(() => …)`) are also not flagged — there's nothing to validate.
 
 ## Why it matters
 
@@ -49,7 +56,7 @@ No auto-fix — the right schema to plug in depends on what this endpoint expect
 
 ## Examples
 
-### Bad
+### Bad — Hono
 
 ```typescript
 import { Hono } from "hono";
@@ -63,7 +70,7 @@ route.post("/users", async (c) => {
 });
 ```
 
-### Good
+### Good — Hono
 
 ```typescript
 import { Hono } from "hono";
@@ -81,6 +88,44 @@ route.post("/users", zValidator("json", createUserSchema), async (c) => {
   const body = c.req.valid("json"); // shaped + constrained
   await prisma.user.create({ data: body });
   return c.json({ ok: true });
+});
+```
+
+### Bad — tRPC
+
+```typescript
+import { initTRPC } from "@trpc/server";
+
+const t = initTRPC.create();
+const publicProcedure = t.procedure;
+
+export const router = t.router({
+  // ❌ no `.input(...)` — `input` is unknown/untyped client data.
+  createUser: publicProcedure.mutation(({ input }) => {
+    return prisma.user.create({ data: input as never }); // ❌ mass-assignment
+  }),
+});
+```
+
+### Good — tRPC
+
+```typescript
+import { initTRPC } from "@trpc/server";
+import { z } from "zod";
+
+const t = initTRPC.create();
+
+export const router = t.router({
+  // Canonical: explicit Zod input.
+  createUser: t.procedure
+    .input(z.object({ name: z.string().min(1).max(100), email: z.string().email() }))
+    .mutation(({ input }) => prisma.user.create({ data: input })),
+
+  // Explicit no-input — also accepted.
+  ping: t.procedure.input(z.void()).query(() => "pong"),
+
+  // No `input` parameter at all — nothing to validate, nothing to flag.
+  listUsers: t.procedure.query(() => prisma.user.findMany()),
 });
 ```
 
@@ -124,14 +169,14 @@ The presence of `from "@hono/zod-validator"` in the file's imports tells R05 thi
 {
   "R05": {
     "severity": "warning",
-    "framework": "auto",                 // hono | auto | off
+    "framework": "auto",                 // hono | trpc | auto | off
     "excludeFiles": ["**/webhooks/**"],   // glob patterns (planned)
-    "validatedReaderNames": ["valid"]     // method names that count as validated reads
+    "validatedReaderNames": ["valid"]     // method names that count as validated reads (Hono)
   }
 }
 ```
 
-`framework: "auto"` checks for `import ... from "hono"` in any source file before activating the Hono detector. Set to `"hono"` to force-on, or `"off"` to disable the rule entirely.
+`framework: "auto"` (the default) probes the project for known framework imports — `hono` and `@trpc/server` — and enables every detector whose import is found. A project that uses both Hono and tRPC gets both walkers. `"hono"` and `"trpc"` force-enable a single detector regardless of imports; `"off"` disables the rule entirely.
 
 ## Suppression
 
@@ -168,8 +213,10 @@ To hard-gate R05 (no suppression honoured, every finding always reported), set i
 
 ## Implementation notes
 
-- **Hono only.** Other frameworks (tRPC, Next.js Route Handlers, Express, Fastify, NestJS) need their own detectors keyed off `framework: "trpc" | "next" | "express" | "fastify" | "nest"`. They use different bypass shapes (e.g. tRPC: a procedure with no `.input(...)` accepting an untyped body; Express: `req.body` direct usage; NestJS: a controller method with no DTO + ValidationPipe). Each is one focused walker.
-- **Wrapper detection is heuristic.** "Imports from `@hono/zod-validator`" catches the standard wrapper pattern but a project that hand-rolls validation without importing zod-validator wouldn't be auto-skipped. Add to `excludeFiles` or refactor to use the standard import.
+- **Hono and tRPC are implemented.** Other frameworks (Next.js Route Handlers, Express, Fastify, NestJS) need their own detectors keyed off `framework: "next" | "express" | "fastify" | "nest"`. They use different bypass shapes (Express: `req.body` direct usage; NestJS: a controller method with no DTO + ValidationPipe; etc.). Each is one focused walker.
+- **tRPC detection is import-gated.** Files that don't import from `@trpc/server` are skipped entirely. This rules out coincidental `.query(...)` / `.mutation(...)` chains from MongoDB drivers, Prisma `findMany()` chains, and other libraries that happen to expose those method names. Known limitation: a file that re-exports `procedure` through a barrel without itself importing `@trpc/server` (e.g. via a `t.ts` helper) would not be walked. Mitigation: use the standard pattern of importing `initTRPC` / `procedure` directly in router files, or set `R05.framework = "trpc"` to force-enable the detector across every TS/TSX file regardless of imports.
+- **tRPC walker is permissive about identifier names.** Any chain ending in `.query(handler)` or `.mutation(handler)` is treated as a procedure candidate — not just `procedure` / `publicProcedure` / `protectedProcedure`. The import gate already filters out non-tRPC code, so identifier matching is unnecessary and would produce false negatives for projects with custom names.
+- **Hono wrapper detection is heuristic.** "Imports from `@hono/zod-validator`" catches the standard wrapper pattern but a project that hand-rolls validation without importing zod-validator wouldn't be auto-skipped. Add to `excludeFiles` or refactor to use the standard import.
 - **Source location is exact** — the rule walks the TS AST via `ts-morph` and gets the actual line of the bypass call directly from the source position.
 
 ## See also

@@ -55,11 +55,11 @@ Related rules.
 
 | ID | Rule | Severity (default) | Surface | Auto-fix | Status |
 |---|---|---|---|---|---|
-| R01 | Zod ↔ Prisma field drift | error | CLI + skill | partial | partial (R01a only) |
+| R01 | Zod ↔ Prisma field drift | error | CLI + skill | partial | done (R01a + R01b + R01c) |
 | R02 | `@relation` without explicit `onDelete` | warning | CLI + skill | — | done |
 | R03 | Enum sync (Prisma ↔ Zod) | error | CLI + skill | partial | done |
 | R04 | Nullability mismatch | error | CLI + skill | — | done |
-| R05 | API boundary bypass (Hono) | warning | CLI + skill | — | done (Hono only) |
+| R05 | API boundary bypass (Hono, tRPC) | warning | CLI + skill | — | done (Hono + tRPC) |
 | R06 | Missing index for `where`/`orderBy` (contextual) | info | skill only | — | skill-only by design |
 | R07 | Redundant indexes (live DB) | info | CLI `--db` + skill | — | done (Postgres) |
 | R08 | Unused indexes (live DB) | info | CLI `--db` + skill | — | done (Postgres) |
