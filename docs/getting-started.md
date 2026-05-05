@@ -158,14 +158,31 @@ What is **not** auto-fixed:
 The static rules don't need a database. The Group B rules do — they snapshot the live DB and compare it against `schema.prisma`:
 
 - **R07** — redundant indexes
-- **R08** — unused indexes (uses pg_stat_user_indexes)
+- **R08** — unused indexes (per-index read counters)
 - **R09** — schema drift (column-level)
 
+Supported providers: **PostgreSQL**, **MySQL/MariaDB**, **SQLite**. The driver for each is an optional peer dependency — install only the one your project uses:
+
 ```bash
-DATABASE_URL=postgres://... prisma-zod-consistency --db --rules R07,R08,R09
+# PostgreSQL
+pnpm add -D postgres
+DATABASE_URL=postgres://user:pass@host:5432/dbname \
+  prisma-zod-consistency --db --rules R07,R08,R09
+
+# MySQL / MariaDB
+pnpm add -D mysql2
+DATABASE_URL=mysql://user:pass@host:3306/dbname \
+  prisma-zod-consistency --db --rules R07,R08,R09
+
+# SQLite (R08 silently skipped — provider doesn't track index usage)
+pnpm add -D better-sqlite3
+DATABASE_URL=file:./prisma/dev.db \
+  prisma-zod-consistency --db --rules R07,R09
 ```
 
-Postgres is supported today; MySQL/SQLite are on the roadmap. Without `--db`, Group B rules silently skip — same binary works in CI jobs that have DB access and ones that don't.
+Without `--db`, Group B rules silently skip — same binary works in CI jobs that have DB access and ones that don't.
+
+R08 needs per-index read counters. On Postgres they come from `pg_stat_user_indexes` (always on). On MySQL they come from `performance_schema.table_io_waits_summary_by_index_usage` (default-on in 5.7+); if `performance_schema` is disabled, R08 silently skips with a stderr warning. SQLite never tracks index usage, so R08 always skips on SQLite — the runner emits one warning when R08 is explicitly requested. R07 (redundant) and R09 (drift) work uniformly on all three providers.
 
 ## 7. Wire it into CI
 

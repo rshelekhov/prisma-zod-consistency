@@ -7,7 +7,7 @@
 | Surface | CLI (`--db`) + skill |
 | Group | B (live DB) |
 | Auto-fix | no — Prisma migrations are user-controlled |
-| Implementation | done (Postgres) |
+| Implementation | done (Postgres + MySQL + SQLite) |
 
 ## What it checks
 
@@ -92,11 +92,21 @@ model CommunicationRead {
 - **None observed in practice.** R07 is one of the highest-precision rules in the suite — the prefix relationship is mechanical and the exclusions handle the corner cases (partial, unique-vs-non-unique). Smoke run on llc_backoffice produced 2 findings, both real.
 - **One theoretical case:** if the wider index is `INCLUDE (...)` (Postgres covering index with payload columns), the narrower index has different scan characteristics. R07 currently doesn't read `INCLUDE` columns, so a narrow `(a)` next to a wide `(a, b) INCLUDE (c)` would still be flagged. In practice covering indexes are rare in Prisma codebases.
 
+## Provider support
+
+| Provider   | Source of index metadata                                  | Notes                                                                                                               |
+|------------|-----------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| postgresql | `pg_index` + `pg_get_indexdef` (parses ordered column list) | Full feature support, including `is_partial` exclusion.                                                              |
+| mysql      | `INFORMATION_SCHEMA.STATISTICS` grouped by `(table, index)` ordered by `SEQ_IN_INDEX` | No partial-index concept in MySQL — `isPartial` is always `false`. Functional/expression entries are skipped.       |
+| sqlite     | `PRAGMA index_list(...)` + `PRAGMA index_info(...)`        | PK on `rowid` (the default for `INTEGER PRIMARY KEY`) is not surfaced by SQLite — R07 doesn't see it, which is fine because R07 never flags PKs anyway. Expression-column entries are dropped. |
+
+The driver behind each adapter is an optional peer dependency: install `postgres` / `mysql2` / `better-sqlite3` only for the engine your project uses.
+
 ## Implementation notes
 
-- **Postgres only.** The query uses `pg_index` + `pg_get_indexdef` to materialize the column list. MySQL/SQLite would need a different introspection approach.
-- **Excludes `_prisma_migrations` table** by default (the table itself, not just indexes).
-- **Schema.** Defaults to introspecting the `public` schema. Override via `R07.schema` (planned).
+- **Excludes `_prisma_migrations` table** by default on every provider (the table itself, not just indexes).
+- **Schema.** Postgres defaults to `public`; MySQL pulls the database name from `DATABASE_URL`; SQLite has only one logical schema (`main`).
+- **Type drift, NULL semantics, length:** out of scope for R07 — see R09 / R09b.
 
 ## See also
 

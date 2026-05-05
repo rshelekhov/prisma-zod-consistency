@@ -6,6 +6,21 @@
  * This split keeps the rules unit-testable without spinning up Postgres.
  */
 
+/** Common options accepted by every adapter in the Group B dispatch table. */
+export interface DbConnectOptions {
+  /** Connection string — typically `process.env.DATABASE_URL`. Provider-specific format. */
+  url: string;
+  /**
+   * Schema/database to introspect. Defaults to a provider-appropriate value:
+   *   - postgres → `public`
+   *   - mysql    → database name parsed from URL
+   *   - sqlite   → ignored (single-database file)
+   */
+  schema?: string;
+  /** Tables to skip entirely (e.g. internal Prisma migration tables). */
+  excludeTables?: string[];
+}
+
 /** A single row from `pg_indexes` enriched with parsed column list and uniqueness. */
 export interface DbIndex {
   schemaName: string;
@@ -31,17 +46,46 @@ export interface DbIndexUsage {
   approxRowCount: number;
 }
 
-/** A column row from `information_schema.columns`. */
+/**
+ * A column row, normalized across providers.
+ *
+ * Sources by provider:
+ *   - postgres → `information_schema.columns`
+ *   - mysql    → `INFORMATION_SCHEMA.COLUMNS`
+ *   - sqlite   → `PRAGMA table_info(...)`
+ *
+ * Provider-specific notes (R09b will tighten these):
+ *   - `udtName` mirrors Postgres `udt_name` (e.g. "varchar", "int4"). For MySQL
+ *     we copy `DATA_TYPE` (e.g. "varchar", "int"); for SQLite we copy the
+ *     declared type lowercased (e.g. "integer", "text").
+ *   - `characterMaximumLength` is `null` on SQLite (no enforced length) and
+ *     for non-string types on every provider.
+ */
 export interface DbColumn {
   schemaName: string;
   tableName: string;
   columnName: string;
-  /** Postgres data type as reported by information_schema (e.g. "character varying"). */
+  /** Broad data type as reported by the provider's metadata (e.g. "character varying", "varchar", "integer"). */
   dataType: string;
-  /** `udt_name` — the more specific type identifier (e.g. "varchar", "text", "int4"). */
+  /** Specific type identifier — see provider notes above. */
   udtName: string;
   isNullable: boolean;
   characterMaximumLength: number | null;
+}
+
+/**
+ * Provider-level capabilities exposed by the snapshot. Consumed by rules that
+ * can't run uniformly across every supported DB — e.g. R08 needs index-usage
+ * statistics, which Postgres and MySQL track but SQLite does not.
+ */
+export interface DbCapabilities {
+  /**
+   * Whether the underlying provider gives us per-index read counts.
+   * - `true`  → Postgres (`pg_stat_user_indexes`), MySQL with `performance_schema`.
+   * - `false` → SQLite (no usage stats), MySQL with `performance_schema=OFF`.
+   * R08 silently skips when this is `false`.
+   */
+  indexUsageTracking: boolean;
 }
 
 /** Bundle handed to Group B rules. */
@@ -49,4 +93,5 @@ export interface DbSnapshot {
   indexes: DbIndex[];
   indexUsage: DbIndexUsage[];
   columns: DbColumn[];
+  capabilities: DbCapabilities;
 }

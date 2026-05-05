@@ -7,7 +7,7 @@
 | Surface | CLI (`--db`) + skill |
 | Group | B (live DB) |
 | Auto-fix | no |
-| Implementation | done (Postgres) |
+| Implementation | done (Postgres + MySQL); skipped on SQLite |
 
 ## What it checks
 
@@ -88,10 +88,18 @@ pg_stat_user_indexes:
 - **Read replicas absorbing reads** — see Ambiguous above.
 - **Indexes created by Prisma `@unique`** that haven't been queried via Prisma but ARE part of the uniqueness constraint. Postgres uses these for constraint enforcement (on insert/update) — that doesn't show up as `idx_scan`. The current rule excludes primary keys but not other unique indexes; this is a known limitation and worth tightening (planned).
 
+## Provider support
+
+| Provider   | Index-usage source                                                          | Behavior                                                                                                                                                                                            |
+|------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| postgresql | `pg_stat_user_indexes.idx_scan` + `pg_stat_user_tables.seq_scan`            | Full Postgres semantics described above: idx_scan = 0 AND seq_scan > 0 AND rows ≥ minRowCount.                                                                                                      |
+| mysql      | `performance_schema.table_io_waits_summary_by_index_usage.count_read`       | Looser semantics — there is no per-table `seq_scan` counter in MySQL. The rule fires on `count_read = 0` AND `approx_rows ≥ minRowCount`. Slightly higher false-positive rate than Postgres, primarily mitigated by `minRowCount`. Requires `performance_schema = ON` (default in MySQL 5.7+ / MariaDB 10.0+); when off, `count_read` returns NULL on every index and the runner sets `capabilities.indexUsageTracking = false` → R08 silently skips with a one-shot stderr warning. |
+| sqlite     | none — SQLite does not track per-index usage anywhere                       | Always silently skipped. The runner emits a single stderr warning ("SQLite does not track index usage; this is a permanent provider limitation") if R08 was explicitly requested via `--rules R08`. R07 (redundant) and R09 (drift) on SQLite are unaffected. |
+
 ## Implementation notes
 
-- **Postgres only.** Stats source is `pg_stat_user_indexes` joined with `pg_stat_user_tables`.
-- **Unique-index exclusion gap.** As noted in Common false positives, the rule excludes `isPrimary` but not `isUnique` more broadly. That can produce false positives on Prisma `@unique` columns. Planned fix: exclude unique indexes by default, expose `R08.includeUnique: true` for users who explicitly want them audited.
+- **Capability flag.** The dispatcher returns a `DbSnapshot.capabilities.indexUsageTracking` boolean. R08 returns `[]` whenever it's `false`, so users always get an empty-but-valid run instead of inconsistent partial output.
+- **Unique-index exclusion gap.** As noted in Common false positives, the rule excludes `isPrimary` but not `isUnique` more broadly. That can produce false positives on Prisma `@unique` columns. Planned fix (B4 in roadmap): exclude unique indexes by default, expose `R08.includeUnique: true` for users who explicitly want them audited.
 - **Ignores tables under `minRowCount`** entirely (not just emits weaker findings).
 - **Doesn't suggest dropping** in the message, only flags. The skill is expected to add context based on table activity.
 

@@ -4,7 +4,7 @@ Deterministic static analysis for Prisma + Zod + TypeScript projects. Run it in 
 
 ## Status
 
-Initial release (0.x). Eight rules implemented: R01-R05 (static), R07-R09 (live DB). R06/R10/R11 are skill-only by design. See [the rule catalog](../checks/rules) for the full list.
+Initial release (0.x). Eight rules implemented: R01-R05 (static), R07-R09 (live DB on **PostgreSQL, MySQL/MariaDB, and SQLite**). R06/R10/R11 are skill-only by design. See [the rule catalog](../checks/rules) for the full list.
 
 ## Install
 
@@ -22,6 +22,18 @@ pnpm install && pnpm build
 cd packages/cli && pnpm link --global
 # Then `prisma-zod-consistency` is on PATH everywhere.
 ```
+
+### Optional database drivers
+
+The static rules (R01–R05) need no extra dependencies. To run the live-DB rules (R07/R08/R09 with `--db`), install the driver for your provider — they are declared as optional peer dependencies:
+
+| Provider              | Install                                      |
+|-----------------------|----------------------------------------------|
+| PostgreSQL            | `pnpm add -D postgres`                       |
+| MySQL / MariaDB       | `pnpm add -D mysql2`                         |
+| SQLite                | `pnpm add -D better-sqlite3`                 |
+
+If you don't run `--db` you don't need any of them. Running `--db` without the matching driver fails with an error that names the install command.
 
 The package installs two equivalent binaries:
 
@@ -45,7 +57,7 @@ prisma-zod-consistency [check] [options]
 | `--cwd <path>` | `process.cwd()` | Project root. Looks for `schema.prisma` at `<cwd>/prisma/schema.prisma` (overridable in config). |
 | `--rules <ids>` | all registered rules | Comma-separated subset, e.g. `R01,R03,R05`. Unknown rule ids are skipped with a stderr note. |
 | `--output <format>` | `pretty` | `pretty` (human) / `json` (machine) / `sarif` (SARIF 2.1.0 for GitHub Code Scanning). |
-| `--db` | off | Snapshot the live database for Group B rules (R07/R08/R09). Without this flag, those rules are silently skipped. |
+| `--db` | off | Snapshot the live database for Group B rules (R07/R08/R09). Without this flag, those rules are silently skipped. Supported providers: PostgreSQL, MySQL/MariaDB, SQLite. |
 | `--database-url <url>` | `process.env.DATABASE_URL` | Override `DATABASE_URL` for `--db`. |
 
 ### `fix` — apply mechanical codemods
@@ -199,12 +211,25 @@ Minimal GitHub Actions step:
     echo "::endgroup::"
 ```
 
-For Group B in CI you typically want a separate job that has DB access:
+For Group B in CI you typically want a separate job that has DB access. Examples per provider:
 
 ```yaml
+# PostgreSQL
 - run: |
-    DATABASE_URL=postgres://... \
+    DATABASE_URL=postgres://user:pass@host:5432/dbname \
       prisma-zod-consistency --rules R07,R08,R09 --db --output json \
+      > pzc-db-findings.json
+
+# MySQL / MariaDB
+- run: |
+    DATABASE_URL=mysql://user:pass@host:3306/dbname \
+      prisma-zod-consistency --rules R07,R08,R09 --db --output json \
+      > pzc-db-findings.json
+
+# SQLite (R08 silently skipped — provider doesn't track index usage)
+- run: |
+    DATABASE_URL=file:./prisma/dev.db \
+      prisma-zod-consistency --rules R07,R09 --db --output json \
       > pzc-db-findings.json
 ```
 
@@ -266,9 +291,9 @@ To hard-gate a rule for compliance — ignore suppression comments entirely and 
 | R04 | Nullability mismatch | error | CLI + skill | — |
 | R05 | API boundary bypass (Hono, tRPC, Next.js) | warning | CLI + skill | — |
 | R06 | Missing index for `where`/`orderBy` | info | skill only | — |
-| R07 | Redundant indexes (DB) | info | CLI `--db` + skill | — |
-| R08 | Unused indexes (DB) | info | CLI `--db` + skill | — |
-| R09 | Schema drift vs live DB | warning | CLI `--db` + skill | — |
+| R07 | Redundant indexes (DB) | info | CLI `--db` (Postgres + MySQL + SQLite) + skill | — |
+| R08 | Unused indexes (DB) | info | CLI `--db` (Postgres + MySQL; skipped on SQLite) + skill | — |
+| R09 | Schema drift vs live DB | warning | CLI `--db` (Postgres + MySQL + SQLite) + skill | — |
 | R10 | N+1 queries | info | skill only | — |
 | R11 | `select: { id: true }` for existence checks | info | skill only | — |
 

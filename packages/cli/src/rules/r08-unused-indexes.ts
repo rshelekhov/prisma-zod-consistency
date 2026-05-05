@@ -34,6 +34,11 @@ export const r08: Rule = {
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {
     if (!ctx.db) return [];
+    // Provider can't deliver per-index read counts — silently skip.
+    // The runner emits a single stderr warning when this happens so the user
+    // understands why the rule produced nothing, without flooding the
+    // findings stream with one info message per index.
+    if (!ctx.db.capabilities.indexUsageTracking) return [];
     return findUnused(ctx.db.indexes, ctx.db.indexUsage, options);
   },
 };

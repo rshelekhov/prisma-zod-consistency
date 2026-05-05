@@ -6,21 +6,23 @@
  * fixture data instead of a live Postgres connection.
  */
 
-import postgres from "postgres";
-import type { DbColumn, DbIndex, DbIndexUsage, DbSnapshot } from "./types.js";
-
-export interface DbConnectOptions {
-  /** Connection string — typically `process.env.DATABASE_URL`. */
-  url: string;
-  /** Schema to introspect. Defaults to `public`. */
-  schema?: string;
-  /** Tables to skip entirely (e.g. internal Prisma migration tables). */
-  excludeTables?: string[];
-}
+// `postgres` is an optional peer; we pull it in dynamically inside snapshotPostgres.
+// `import type` is a pure type reference — tsc strips it from emit, so it does NOT
+// pull `postgres` at runtime even when the dependency is missing.
+import type postgres from "postgres";
+import type { DbColumn, DbConnectOptions, DbIndex, DbIndexUsage, DbSnapshot } from "./types.js";
 
 const DEFAULT_EXCLUDE_TABLES = ["_prisma_migrations"];
 
-export async function snapshotDatabase(opts: DbConnectOptions): Promise<DbSnapshot> {
+/**
+ * Postgres adapter. Imported dynamically by `db/index.ts` so that the `postgres`
+ * driver can be an optional peer dependency — projects that never call --db,
+ * or that use only --db with mysql/sqlite, don't need it installed.
+ */
+export async function snapshotPostgres(opts: DbConnectOptions): Promise<DbSnapshot> {
+  // Dynamic import: keeps `postgres` an optional peer. If it's missing we
+  // surface an actionable error in `db/index.ts` rather than crashing here.
+  const { default: postgres } = await import("postgres");
   const sql = postgres(opts.url, {
     onnotice: () => {}, // suppress NOTICE noise
     max: 1,
@@ -34,7 +36,12 @@ export async function snapshotDatabase(opts: DbConnectOptions): Promise<DbSnapsh
       fetchIndexUsage(sql, schema, excludeTables),
       fetchColumns(sql, schema, excludeTables),
     ]);
-    return { indexes, indexUsage, columns };
+    return {
+      indexes,
+      indexUsage,
+      columns,
+      capabilities: { indexUsageTracking: true },
+    };
   } finally {
     await sql.end({ timeout: 5 });
   }

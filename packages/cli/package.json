@@ -41,17 +41,36 @@
     "cosmiconfig": "^9.0.0",
     "diff": "^7.0.0",
     "picocolors": "^1.1.1",
-    "postgres": "^3.4.5",
     "tinyglobby": "^0.2.10",
     "ts-morph": "^24.0.0"
   },
+  "peerDependencies": {
+    "better-sqlite3": ">=11.0.0",
+    "mysql2": ">=3.0.0",
+    "postgres": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    },
+    "postgres": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
     "@types/diff": "^7.0.0",
     "@types/node": "^20.16.0",
     "@types/sarif": "^2.1.7",
     "ajv": "^8.17.1",
     "ajv-draft-04": "^1.0.0",
     "ajv-formats": "^3.0.1",
+    "better-sqlite3": "^11.5.0",
+    "mysql2": "^3.11.0",
+    "postgres": "^3.4.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   },

@@ -3,7 +3,7 @@
  */
 
 import { type ResolvedConfig, type RuleConfig, loadConfig } from "./config.js";
-import { snapshotDatabase } from "./db/postgres.js";
+import { isDbProviderSupported, snapshotDatabase } from "./db/index.js";
 import { discover } from "./discovery.js";
 import { DB_RULES, allRules, getRule } from "./rules/index.js";
 import { clearSuppressionCache, getSuppressionMap } from "./suppression.js";
@@ -28,6 +28,13 @@ export interface RunResult {
   skippedRules: RuleId[];
   /** Project root used by output formatters that need to relativize paths (SARIF). */
   rootDir: string;
+  /**
+   * Diagnostic messages the runner wants the CLI to surface on stderr — for
+   * example, "R08 was requested but the provider doesn't track index usage".
+   * These are not findings: they don't appear in JSON/SARIF output, they're
+   * meant for the human reading the terminal.
+   */
+  warnings: string[];
 }
 
 export async function run(options: RunOptions = {}): Promise<RunResult> {
@@ -37,6 +44,8 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
   const requested = options.rules ?? allRules().map((r) => r.id);
   const wantsDbRule = requested.some((id) => DB_RULES.has(id));
 
+  const warnings: string[] = [];
+
   if (options.db && wantsDbRule) {
     const url = options.databaseUrl ?? process.env.DATABASE_URL;
     if (!url) {
@@ -44,12 +53,26 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
         "DB rules requested but no DATABASE_URL is set. Pass --database-url or export DATABASE_URL.",
       );
     }
-    if (ctx.provider !== "postgresql") {
+    if (!isDbProviderSupported(ctx.provider)) {
       throw new Error(
-        `DB rules currently only support Postgres; this project's provider is ${ctx.provider}.`,
+        `Group B rules support postgresql / mysql / sqlite; this project's provider is ${ctx.provider}. Skip --db, or run the rules from a project on a supported engine.`,
       );
     }
-    ctx.db = await snapshotDatabase({ url });
+    ctx.db = await snapshotDatabase(ctx.provider, { url });
+
+    // Emit a one-shot warning when the user explicitly asked for R08 but the
+    // provider can't deliver index-usage stats. R08 still silently skips
+    // (returning [] below); the warning is purely so the user understands
+    // why nothing was reported. Don't warn if R08 wasn't requested at all.
+    if (requested.includes("R08") && !ctx.db.capabilities.indexUsageTracking) {
+      warnings.push(
+        `R08 (unused indexes) was requested but ${ctx.provider} does not expose index-usage statistics in a usable form for this database. R08 will be skipped. ${
+          ctx.provider === "mysql"
+            ? "Enable performance_schema (MySQL default in 5.7+) to make R08 available."
+            : "SQLite does not track index usage; this is a permanent provider limitation."
+        }`,
+      );
+    }
   }
 
   const findings: Finding[] = [];
@@ -88,6 +111,7 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
     ranRules: ran,
     skippedRules: skipped,
     rootDir: ctx.rootDir,
+    warnings,
   };
 }
 

@@ -54,6 +54,15 @@ program
           databaseUrl: opts.databaseUrl,
         });
 
+        // Surface adapter-level warnings (e.g. R08 skipped because the
+        // provider can't deliver index usage stats) before the report.
+        // These appear regardless of output format — the human watching
+        // stderr wants them, machine consumers (json/sarif on stdout) are
+        // unaffected.
+        for (const w of result.warnings) {
+          process.stderr.write(`warning: ${w}\n`);
+        }
+
         if (result.skippedRules.length > 0 && opts.output === "pretty") {
           process.stderr.write(
             `note: skipped unregistered or unsatisfied rule(s): ${result.skippedRules.join(", ")}\n`,

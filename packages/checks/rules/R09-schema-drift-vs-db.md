@@ -7,7 +7,7 @@
 | Surface | CLI (`--db`) + skill |
 | Group | B (live DB) |
 | Auto-fix | no — drift always implies a migration decision |
-| Implementation | done (column-level for Postgres); type-level drift is R09b (planned) |
+| Implementation | done (column-level for Postgres + MySQL + SQLite); type-level drift is R09b (planned) |
 
 ## What it checks
 
@@ -96,6 +96,14 @@ Likely a hand-written migration relaxed the column to nullable, but `schema.pris
 - **Pending migration that you intend to run later.** The "model declared but missing in DB" finding is correct but expected — run the migration. Not really a false positive, just an actionable signal.
 - **Views and matviews** — see Ambiguous.
 - **Other-schema tables.** The introspection defaults to `public`. Tables in other schemas (e.g. `audit.events`) are invisible. If you have multi-schema, configure `R09.schema` (planned).
+
+## Provider support
+
+| Provider   | Source of column metadata               | Notes                                                                                                                                |
+|------------|-----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| postgresql | `information_schema.columns`            | Full feature support. Default schema `public`; override planned via `R09.schema`.                                                     |
+| mysql      | `INFORMATION_SCHEMA.COLUMNS`            | Full column / nullability comparison. The MySQL adapter pulls `DATA_TYPE` (mapped into both `dataType` and `udtName` for symmetry).   |
+| sqlite     | `PRAGMA table_info(...)`                | No declared length is enforced; `characterMaximumLength` is always `null` on SQLite, which limits R09b (type drift, planned) but does not affect R09 v1's column-existence and nullability checks. |
 
 ## Implementation notes
 
