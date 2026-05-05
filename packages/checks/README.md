@@ -59,7 +59,7 @@ Related rules.
 | R02 | `@relation` without explicit `onDelete` | warning | CLI + skill | — | done |
 | R03 | Enum sync (Prisma ↔ Zod) | error | CLI + skill | partial | done |
 | R04 | Nullability mismatch | error | CLI + skill | — | done |
-| R05 | API boundary bypass (Hono, tRPC) | warning | CLI + skill | — | done (Hono + tRPC) |
+| R05 | API boundary bypass (Hono, tRPC, Next.js) | warning | CLI + skill | — | done (Hono + tRPC + Next) |
 | R06 | Missing index for `where`/`orderBy` (contextual) | info | skill only | — | skill-only by design |
 | R07 | Redundant indexes (live DB) | info | CLI `--db` + skill | — | done (Postgres) |
 | R08 | Unused indexes (live DB) | info | CLI `--db` + skill | — | done (Postgres) |

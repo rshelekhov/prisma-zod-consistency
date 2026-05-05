@@ -100,8 +100,16 @@ Minimal example:
 
   "rules": {
     "R02": { "severity": "warning", "requireOnUpdate": false },
-    "R05": { "severity": "warning", "framework": "auto" }   // hono | trpc | auto | off
+    "R05": { "severity": "warning", "framework": "auto" }   // hono | trpc | next | auto | off
   }
+}
+```
+
+If you use Next.js with `app/` or `pages/` at the project root (no `src/` directory), extend `include` so the Next sub-walkers see those files:
+
+```jsonc
+{
+  "include": ["src/**/*.ts", "src/**/*.tsx", "app/**/*.{ts,tsx}", "pages/**/*.{ts,tsx}"]
 }
 ```
 

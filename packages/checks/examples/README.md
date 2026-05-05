@@ -22,12 +22,15 @@ examples/
 ├── R05/
 │   ├── bad/         # Hono fixture
 │   ├── good/        # Hono fixture
-│   └── trpc/
-│       ├── bad/
-│       └── good/
+│   ├── trpc/
+│   │   ├── bad/
+│   │   └── good/
+│   └── next/
+│       ├── bad/    # Route Handler + Server Action (file + inline) + Pages API
+│       └── good/   # all surfaces with proper Zod parse / suppression
 └── ...
 ```
 
-Multi-detector rules (currently only R05, which has separate Hono and tRPC walkers) keep one fixture per detector under a framework-named subfolder.
+Multi-detector rules (currently only R05, which has separate Hono / tRPC / Next.js walkers) keep one fixture per detector under a framework-named subfolder.
 
 Each fixture is a minimal, self-contained slice — schema + Zod + (optional) TS usage — small enough to read in one screen.
