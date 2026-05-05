@@ -47,3 +47,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # actions/setup-node writes ~/.npmrc with `${NODE_AUTH_TOKEN}` as a
+          # placeholder. Without this var set, the placeholder resolves to the
+          # empty string and `npm publish` ends up unauthenticated — npm masks
+          # that as `E404 PUT /<pkg>` for granular tokens, which is exactly
+          # what burned 0.1.1 and 0.2.0 release attempts.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
