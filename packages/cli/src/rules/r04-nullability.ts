@@ -25,7 +25,7 @@
 import {
   type FieldInfo,
   type PrismaModelRegistry,
-  loadPrismaRegistry,
+  parsePrismaRegistry,
 } from "../schema/prisma-models.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 import {
@@ -56,9 +56,9 @@ export const r04: Rule = {
     const ignoreModels = new Set(config.ignoreModels ?? []);
     const ignoreSchemaSuffixes = config.ignoreSchemaSuffixes ?? [];
 
-    const registry = await loadPrismaRegistry(ctx.schemaPath);
+    const registry = parsePrismaRegistry(ctx.schemaSource);
     const zodSchemas = await discoverZodSchemas(ctx.sourceFiles);
-    const matches = matchSchemasToModels(zodSchemas, registry);
+    const matches = matchSchemasToModels(zodSchemas, registry, ctx.namingPrefixes);
 
     const findings: Finding[] = [];
     for (const match of matches) {

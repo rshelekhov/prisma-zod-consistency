@@ -144,9 +144,19 @@ Loaded via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — searche
 
 ```jsonc
 {
+  // schemaPath may point at a single .prisma file OR at a directory holding
+  // multiple .prisma files (Prisma 5.15+ `prismaSchemaFolder`, default in 6.x).
+  // Multi-file projects auto-concatenate; non-entry datasource/generator
+  // blocks are stripped, and findings report against the original file.
   "schemaPath": "prisma/schema.prisma",
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["**/*.test.ts", "**/*.spec.ts", "**/node_modules/**"],
+
+  // Single-character PascalCase prefixes to strip when matching Zod schemas
+  // to Prisma models. Applied with a PascalCase boundary check, so `ZUser`
+  // → `User` but `Zone` stays `Zone`. Default `["Z"]`. Add `"T"` or `"I"`
+  // when your project uses them, or set to `[]` to disable.
+  "namingPrefixes": ["Z"],
 
   "rules": {
     // Per-rule severity override + rule-specific options.
@@ -154,6 +164,9 @@ Loaded via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — searche
     "R01": {
       "severity": "error",
       "ignoreModels": ["AuditLog"],
+      // `strict` (default, backwards-compat) | `actionable` (info on Zod-stricter)
+      // | `off-stricter` (drop Zod-stricter findings entirely). See the R01 spec.
+      "directionalityMode": "strict",
       "suppressionsEnabled": true            // honour `// pz-disable-next-line` comments (default)
     },
     "R02": {

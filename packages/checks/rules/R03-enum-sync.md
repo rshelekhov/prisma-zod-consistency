@@ -11,10 +11,11 @@
 
 ## What it checks
 
-For every enum declared in `schema.prisma`, every Zod schema referencing it must include exactly the same set of values. The rule covers two patterns:
+For every enum declared in `schema.prisma`, every Zod schema referencing it must include exactly the same set of values. The rule covers three patterns:
 
 - **`z.nativeEnum(PrismaEnum)`** — type-safe by construction; the rule still verifies that the imported symbol matches the expected Prisma enum and is not aliased to something else.
 - **`z.enum(['VALUE_1', 'VALUE_2'])`** — value literals; the rule does a set comparison against the Prisma enum and flags any missing or extra values.
+- **`z.enum(PrismaEnum)`** (Zod 4 native-enum shorthand) — the rule resolves the identifier through ts-morph (TS `enum X` declarations and `const X = {...} as const` literals), then either compares the resolved values to the Prisma enum or — when TS-side resolution can't reach the declaration — accepts the binding by name match against the Prisma registry. When neither resolution path succeeds, the rule emits an `info`-level note rather than asserting drift.
 
 Mismatches are reported per direction: values in Prisma but not in Zod, and values in Zod but not in Prisma.
 
@@ -138,6 +139,7 @@ To hard-gate R03 (no suppression honoured, every finding always reported), set i
 
 ## Implementation notes
 
+- **Zod 4 `z.enum(IDENT)` resolution (0.8.0).** Three-step ladder: (1) ts-morph alias chain → resolve to `enum X` or `const X = {...} as const` declaration. (2) name match against the Prisma registry — covers the common case of `import { Foo } from "@prisma/client"` where the `.d.ts` isn't in the parse. (3) info-level note when neither resolves. This unblocks Zod 4 codebases that previously generated 97% false-positive R03 findings (smoke baseline on dub: 38 findings, 1 true positive).
 - **Field-level matching.** The rule walks Zod object schemas matched to Prisma models (via the same `matchSchemasToModels` heuristic R01/R04 use). For each Prisma field whose type is an enum, it looks for the same-named Zod field and checks that the Zod side is `z.enum`/`z.nativeEnum` with matching values.
 - **Pipe-chain detection.** Before flagging a base type like `z.string()` for an enum-typed Prisma field, the rule walks the chain looking for `.pipe(z.nativeEnum(<ExpectedEnum>))`, `.pipe(z.enum(...))`, or `.pipe(<knownEnumSchema>)` where `<knownEnumSchema>` is a project-local Zod schema bound to the matching Prisma enum. Any of those is sufficient evidence the chain is already correct — the finding is suppressed. This keeps the codemod from breaking case-insensitive coerce idioms (see "Common false positives").
 - **Auto-fix scope.** Only the base call (`z.string()` → `z.nativeEnum(EnumName)`) is auto-fixed. Trailing modifiers like `.nullable()`, `.optional()`, `.default(...)` are preserved.

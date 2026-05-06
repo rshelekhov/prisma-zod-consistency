@@ -1,10 +1,15 @@
 import { relative } from "node:path";
 import pc from "picocolors";
+import type { RunSummary } from "../runner.js";
 import type { Finding } from "../types.js";
 
-export function formatPretty(findings: Finding[], cwd: string = process.cwd()): string {
+export function formatPretty(
+  findings: Finding[],
+  cwd: string = process.cwd(),
+  summary?: RunSummary,
+): string {
   if (findings.length === 0) {
-    return pc.green("✓ no findings");
+    return formatZeroFindings(summary);
   }
 
   const byRule = groupBy(findings, (f) => f.ruleId);
@@ -33,6 +38,36 @@ export function formatPretty(findings: Finding[], cwd: string = process.cwd()): 
   );
 
   return lines.join("\n");
+}
+
+/**
+ * UX bug #5 (0.8.0): when the run produced no findings, the user previously
+ * had no way to tell "tool found nothing" from "tool didn't actually look at
+ * what I expected". The summary disambiguates.
+ */
+function formatZeroFindings(summary: RunSummary | undefined): string {
+  if (!summary) {
+    return pc.green("✓ no findings");
+  }
+  const { prismaModelCount, zodSchemaCount, matchedSchemaCount, namingPrefixes } = summary;
+  const detail =
+    `${prismaModelCount} Prisma model${plural(prismaModelCount)}, ` +
+    `${zodSchemaCount} Zod schema${plural(zodSchemaCount)}, ` +
+    `${matchedSchemaCount} matched after name normalization`;
+
+  if (zodSchemaCount > 0 && matchedSchemaCount === 0) {
+    const prefixesShown = namingPrefixes.length > 0 ? namingPrefixes.join('", "') : "(none)";
+    return [
+      pc.yellow(`⚠ no findings, but no Zod schemas matched any Prisma models (${detail}).`),
+      pc.dim(
+        `  Names are normalized by stripping affixes (Schema, Dto, Input, ...) and prefixes ["${prefixesShown}"].`,
+      ),
+      pc.dim(
+        '  If your project uses a different naming convention, set `namingPrefixes` in `.prismazodrc.json` (e.g. ["T"] or ["I"], or [] to disable).',
+      ),
+    ].join("\n");
+  }
+  return `${pc.green("✓ no findings")} ${pc.dim(`(${detail})`)}`;
 }
 
 function severityBadge(severity: Finding["severity"]): string {

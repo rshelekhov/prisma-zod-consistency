@@ -5,15 +5,20 @@
  * source file list, and the Zod-generation mode that drives R01 sub-mode
  * selection.
  *
- * Pre-alpha: implementation is intentionally minimal. The Prisma parse pass
- * and Zod generator detection land alongside the first real rule run.
+ * Multi-file Prisma schemas (Prisma 5.15+ `prismaSchemaFolder`, default in 6.x)
+ * are flattened by `loadSchemaSource` into one logical source plus a per-line
+ * origin map, so rules can report findings against the original `.prisma` file.
  */
 
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { glob } from "tinyglobby";
 import type { ResolvedConfig } from "./config.js";
+import { DiscoveryError } from "./discovery-error.js";
+import { loadSchemaSource } from "./schema/load-schema.js";
 import type { KnownZodGenerator, ProjectContext, ZodMode } from "./types.js";
+
+export { DiscoveryError };
 
 const KNOWN_GENERATORS: KnownZodGenerator[] = [
   "zod-prisma-types",
@@ -26,12 +31,7 @@ export async function discover(config: ResolvedConfig): Promise<ProjectContext> 
     ? config.schemaPath
     : resolve(config.rootDir, config.schemaPath);
 
-  const schemaSource = await readFile(schemaPath, "utf8").catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
-      throw new DiscoveryError(`schema.prisma not found at ${schemaPath}`);
-    }
-    throw err;
-  });
+  const loaded = await loadSchemaSource(schemaPath);
 
   const sourceFiles = await glob(config.include, {
     cwd: config.rootDir,
@@ -40,19 +40,23 @@ export async function discover(config: ResolvedConfig): Promise<ProjectContext> 
     dot: false,
   });
 
-  const initialMode = detectZodMode(schemaSource);
+  const initialMode = detectZodMode(loaded.schemaSource);
   const zodMode = await maybeUpgradeToHybrid(initialMode, {
-    schemaPath,
+    schemaPath: loaded.primaryFile,
     rootDir: config.rootDir,
     sourceFiles,
   });
 
   return {
     rootDir: config.rootDir,
-    schemaPath,
-    provider: detectProvider(schemaSource),
+    schemaPath: loaded.primaryFile,
+    schemaSource: loaded.schemaSource,
+    schemaSourceMap: loaded.schemaSourceMap,
+    schemaFiles: loaded.files,
+    provider: detectProvider(loaded.schemaSource),
     sourceFiles,
     zodMode,
+    namingPrefixes: config.namingPrefixes,
   };
 }
 
@@ -75,7 +79,7 @@ async function maybeUpgradeToHybrid(
     if (isPathInside(file, outputDirAbs)) continue;
     const source = await readFile(file, "utf8").catch(() => undefined);
     if (source === undefined) continue;
-    if (/from\s+["']zod["']/.test(source)) {
+    if (/from\s+["']zod(\/v[34])?["']/.test(source)) {
       return { kind: "hybrid", generator: mode.generator, outputDir: mode.outputDir };
     }
   }
@@ -140,8 +144,4 @@ function detectZodMode(schemaSource: string): ZodMode {
   }
 
   return { kind: "hand-written" };
-}
-
-export class DiscoveryError extends Error {
-  override readonly name = "DiscoveryError";
 }

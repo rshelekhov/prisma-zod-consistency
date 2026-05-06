@@ -26,7 +26,7 @@ import {
 import {
   type FieldInfo,
   type PrismaModelRegistry,
-  loadPrismaRegistry,
+  parsePrismaRegistry,
 } from "../schema/prisma-models.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
@@ -47,7 +47,7 @@ export const r09d: Rule = {
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {
     if (!ctx.db) return [];
-    const registry = await loadPrismaRegistry(ctx.schemaPath);
+    const registry = parsePrismaRegistry(ctx.schemaSource);
     return diffDefaults(registry, ctx.db.columns, options);
   },
 };

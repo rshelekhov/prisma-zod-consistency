@@ -21,7 +21,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { type PrismaModelRegistry, loadPrismaRegistry } from "../schema/prisma-models.js";
+import { type PrismaModelRegistry, parsePrismaRegistry } from "../schema/prisma-models.js";
 import type { Finding, Fix, ProjectContext, Rule, RuleOptions } from "../types.js";
 import { type ZodField, type ZodSchemaInfo, discoverZodSchemas } from "../zod/discover.js";
 import { matchSchemasToModels } from "../zod/match.js";
@@ -45,7 +45,7 @@ export const r03: Rule = {
     const ignoreEnums = new Set(config.ignoreEnums ?? []);
     const preferNativeEnum = config.preferNativeEnum ?? false;
 
-    const registry = await loadPrismaRegistry(ctx.schemaPath);
+    const registry = parsePrismaRegistry(ctx.schemaSource);
     const zodSchemas = await discoverZodSchemas(ctx.sourceFiles);
 
     const findings: Finding[] = [];
@@ -57,21 +57,21 @@ export const r03: Rule = {
     const enumSchemaToPrisma = new Map<string, string>();
     for (const schema of zodSchemas) {
       if (schema.shape.kind !== "enum") continue;
-      const matched = matchEnumSchemaToPrisma(schema, registry);
+      const matched = matchEnumSchemaToPrisma(schema, registry, ctx.namingPrefixes);
       if (matched) enumSchemaToPrisma.set(schema.name, matched);
     }
 
     // Pass 1: top-level enum schemas.
     for (const schema of zodSchemas) {
       if (schema.shape.kind !== "enum") continue;
-      const matchedEnum = matchEnumSchemaToPrisma(schema, registry);
+      const matchedEnum = matchEnumSchemaToPrisma(schema, registry, ctx.namingPrefixes);
       if (!matchedEnum) continue;
       if (ignoreEnums.has(matchedEnum)) continue;
       findings.push(...checkTopLevelEnumSchema(schema, matchedEnum, registry, options));
     }
 
     // Pass 2: enum-typed fields inside object schemas.
-    const objectMatches = matchSchemasToModels(zodSchemas, registry);
+    const objectMatches = matchSchemasToModels(zodSchemas, registry, ctx.namingPrefixes);
     const sourceCache = new Map<string, string>();
 
     for (const match of objectMatches) {
@@ -113,14 +113,19 @@ export const r03: Rule = {
 function matchEnumSchemaToPrisma(
   schema: ZodSchemaInfo,
   registry: PrismaModelRegistry,
+  namingPrefixes: readonly string[],
 ): string | undefined {
   if (schema.shape.kind !== "enum") return undefined;
   // For nativeEnum the identifier itself is the most reliable signal.
   const ref = schema.shape.nativeEnumName;
   if (ref && registry.enums.has(ref)) return ref;
+  // Zod 4 native-enum shorthand `z.enum(IDENT)` — same name signal.
+  const ident = schema.shape.enumIdentifier;
+  if (ident && registry.enums.has(ident)) return ident;
 
-  // Otherwise fall back to the schema name with affixes stripped.
-  const stripped = stripEnumAffixes(schema.name);
+  // Otherwise fall back to the schema name with affixes stripped (including
+  // any configured leading PascalCase prefix like `Z` in `ZUserRole`).
+  const stripped = stripEnumAffixes(schema.name, namingPrefixes);
   if (!stripped) return undefined;
   const lowerToEnum = new Map<string, string>();
   for (const enumName of registry.enums.keys()) {
@@ -155,7 +160,14 @@ function checkTopLevelEnumSchema(
     return [];
   }
 
-  // z.enum literals: set comparison.
+  // Zod 4 native-enum shorthand `z.enum(IDENT)` without TS-resolved values.
+  // The identifier already matched a Prisma enum (we wouldn't be here
+  // otherwise), so the binding is trusted — no drift to report.
+  if (schema.shape.enumIdentifier && schema.shape.values.length === 0) {
+    return [];
+  }
+
+  // z.enum literals (or Zod 4 with TS-resolved values): set comparison.
   return diffEnumValues(
     schema.name,
     schema.shape.values,
@@ -212,6 +224,56 @@ function checkFieldEnumDrift(
       ];
     }
     return [];
+  }
+
+  // Zod 4 native-enum shorthand at field level: `field: z.enum(IDENT)`.
+  // Treat exactly like `z.nativeEnum(IDENT)` for the identifier-vs-Prisma
+  // comparison. Order matters here — a Prisma-name match should silence the
+  // rule even when TS-side resolution failed (the dub case: `PostbackReceiver`
+  // imported from a monorepo @prisma/client whose .d.ts isn't in the parse).
+  if (zodField.enumIdentifier !== undefined) {
+    if (zodField.enumIdentifier === prismaEnumName) {
+      // Name match: the binding is trusted. Surface a values-drift finding
+      // only when TS-side resolution succeeded AND those values disagree.
+      if (zodField.enumValues && zodField.enumValues.length > 0) {
+        return diffEnumValues(
+          zodField.name,
+          zodField.enumValues,
+          prismaEnumName,
+          prismaValues,
+          schema.file,
+          zodField.line,
+          options,
+        );
+      }
+      return [];
+    }
+    if (zodField.enumResolved === false) {
+      // No TS resolution AND no name match — most likely an external alias
+      // we can't see (e.g. a re-exported Prisma client enum under a
+      // different name). Surface an info-level note instead of a hard error.
+      return [
+        {
+          ruleId: "R03",
+          severity: "info",
+          message: `Field \`${zodField.name}\` uses \`z.enum(${zodField.enumIdentifier})\`; could not resolve the enum reference. Verify that it points at \`${prismaEnumName}\`.`,
+          location: { file: schema.file, line: zodField.line },
+          suggestion: `If the binding is correct, ignore this note. Otherwise switch to \`z.nativeEnum(${prismaEnumName})\` for an explicit reference.`,
+          scope: { model: schema.name, field: zodField.name },
+        },
+      ];
+    }
+    // TS-resolved but identifier name doesn't match the expected Prisma enum.
+    return [
+      {
+        ruleId: "R03",
+        severity: options.severity,
+        message: `Field \`${zodField.name}\` uses \`z.enum(${zodField.enumIdentifier})\` but Prisma type is \`${prismaEnumName}\`.`,
+        location: { file: schema.file, line: zodField.line },
+        suggestion: `Use \`z.nativeEnum(${prismaEnumName})\` (or \`z.enum(${prismaEnumName})\` on Zod 4).`,
+        scope: { model: schema.name, field: zodField.name },
+      },
+    ];
   }
 
   // baseType === "enum": compare values.
@@ -446,7 +508,7 @@ function enumIsInScope(source: string, name: string): boolean {
 
 const ENUM_AFFIXES = ["Schema", "Enum"];
 
-function stripEnumAffixes(name: string): string {
+function stripEnumAffixes(name: string, namingPrefixes: readonly string[]): string {
   let core = name;
   for (const affix of ENUM_AFFIXES) {
     if (core.length > affix.length && core.endsWith(affix)) {
@@ -456,6 +518,18 @@ function stripEnumAffixes(name: string): string {
   // CamelCase → PascalCase: bookingStatus → BookingStatus
   if (core.length > 0) {
     core = core.charAt(0).toUpperCase() + core.slice(1);
+  }
+  // Mirror the model-side prefix strip: `ZUserRole` → `UserRole`. Only
+  // applied when the next character is uppercase (so we don't munch into
+  // names like `Zone`).
+  for (const prefix of namingPrefixes) {
+    if (prefix.length === 0) continue;
+    if (core.length <= prefix.length) continue;
+    if (!core.startsWith(prefix)) continue;
+    const nextChar = core.charAt(prefix.length);
+    const code = nextChar.charCodeAt(0);
+    if (code < 65 || code > 90) continue;
+    core = core.slice(prefix.length);
   }
   return core;
 }

@@ -19,7 +19,7 @@ import type { DbColumn } from "../db/types.js";
 import {
   type FieldInfo,
   type PrismaModelRegistry,
-  loadPrismaRegistry,
+  parsePrismaRegistry,
 } from "../schema/prisma-models.js";
 import {
   type SupportedProvider,
@@ -50,7 +50,7 @@ export const r09b: Rule = {
     // why the rule produced nothing without flooding the findings stream.
     if (!ctx.db.capabilities.typeDriftAccurate) return [];
     if (!isSupportedProvider(ctx.provider)) return [];
-    const registry = await loadPrismaRegistry(ctx.schemaPath);
+    const registry = parsePrismaRegistry(ctx.schemaSource);
     return diffTypes(registry, ctx.db.columns, ctx.provider, options);
   },
 };

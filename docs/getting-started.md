@@ -98,12 +98,22 @@ Minimal example:
   "include": ["src/**/*.ts"],
   "exclude": ["**/*.test.ts", "**/*.spec.ts", "**/node_modules/**"],
 
+  // Single-character PascalCase prefixes to strip when matching Zod schemas
+  // to Prisma models. Default: ["Z"] (covers formbricks/t3-stack/zod codegens).
+  // Add "T" or "I" if your project uses those, or set to [] to disable.
+  "namingPrefixes": ["Z"],
+
   "rules": {
+    "R01": { "directionalityMode": "actionable" }, // recommended — info on `z.email()` for String
     "R02": { "severity": "warning", "requireOnUpdate": false },
     "R05": { "severity": "warning", "framework": "auto" }   // hono | trpc | next | auto | off
   }
 }
 ```
+
+### Multi-file Prisma schemas (Prisma 5.15+ `prismaSchemaFolder`)
+
+Point `schemaPath` at either the entry file (`prisma/schema.prisma`) or the directory (`prisma/` — or `prisma/schema/`). Sibling `*.prisma` files are auto-detected, concatenated for analysis, and findings are reported back against the original file (e.g. `prisma/post.prisma:14`, not the synthetic combined position). Duplicate `datasource` and `generator` blocks from non-entry files are stripped automatically.
 
 If you use Next.js with `app/` or `pages/` at the project root (no `src/` directory), extend `include` so the Next sub-walkers see those files:
 
@@ -248,6 +258,6 @@ If something looks like a false positive, check the rule spec's "Common false po
 
 **`Unsupported or missing datasource provider`** — your `datasource` block doesn't declare a `provider`, or it's a provider this tool doesn't recognize. Currently supported: `postgresql`, `mysql`, `sqlite`, `sqlserver`, `mongodb`, `cockroachdb`.
 
-**No findings, but you expected some** — check that your `include` glob actually matches your Zod schemas. Run with `--rules R04` (the loudest static rule) to verify rules are reaching your files.
+**No findings, but you expected some** — check that your `include` glob actually matches your Zod schemas. Run with `--rules R04` (the loudest static rule) to verify rules are reaching your files. Since 0.8.0 the pretty output also shows `(N Prisma models, M Zod schemas, K matched)` on zero-finding runs of R01/R03/R04 — if `K === 0`, your project likely uses a Z/T/I-prefix Zod naming convention that needs `namingPrefixes` configured.
 
 **`DATABASE_URL not set`** — you passed `--db` but no URL is exported in the environment. Either export it, or pass `--database-url <url>`.

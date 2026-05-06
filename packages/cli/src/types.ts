@@ -78,14 +78,39 @@ export interface FileEdit {
 export interface ProjectContext {
   /** Absolute path to the project root (where `.prismazodrc` or `package.json` lives). */
   rootDir: string;
-  /** Absolute path to `schema.prisma`. */
+  /**
+   * Absolute path to the entry `schema.prisma`. For multi-file projects
+   * (Prisma 5.15+ `prismaSchemaFolder`) this is the alphabetically first
+   * `*.prisma` in the schema directory or the file the user pointed at.
+   */
   schemaPath: string;
+  /**
+   * Combined Prisma schema source — single-file content for projects with
+   * one `*.prisma`, concatenated for multi-file projects with non-entry
+   * `datasource` and `generator` blocks stripped.
+   */
+  schemaSource: string;
+  /**
+   * Per-line origin map for `schemaSource`. Index `i` describes combined-line
+   * `i + 1` in terms of (original file, original 1-based line). Synthetic
+   * separator lines have `line: 0`. Use `mapCombinedLine` to translate
+   * findings back to the original source coordinates.
+   */
+  schemaSourceMap: import("./schema/load-schema.js").SourceLineOrigin[];
+  /** Every `.prisma` file that contributed to `schemaSource`. */
+  schemaFiles: string[];
   /** Datasource provider as declared in `schema.prisma`. */
   provider: "postgresql" | "mysql" | "sqlite" | "sqlserver" | "mongodb" | "cockroachdb";
   /** TS/JS files we should scan. */
   sourceFiles: string[];
   /** Detected Zod-generation mode (drives R01). */
   zodMode: ZodMode;
+  /**
+   * Single-character PascalCase prefixes the user's project uses on Zod
+   * schema names (e.g. `Z` in `ZUser`). Stripped during model-matching with
+   * a PascalCase boundary check. Default `["Z"]` — see `UserConfig`.
+   */
+  namingPrefixes: readonly string[];
   /** Live-DB snapshot. Populated when `--db` is passed and DATABASE_URL is set. */
   db?: import("./db/types.js").DbSnapshot;
 }

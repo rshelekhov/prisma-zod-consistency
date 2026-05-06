@@ -147,6 +147,6 @@ function renderOutput(format: string, result: RunResult): string {
       return formatSarif(result.findings, { rootDir: result.rootDir, rules });
     }
     default:
-      return formatPretty(result.findings);
+      return formatPretty(result.findings, undefined, result.summary);
   }
 }

@@ -8,8 +8,8 @@
  * See: packages/checks/rules/R02-onDelete-explicit.md
  */
 
-import { readFile } from "node:fs/promises";
 import { getSchema } from "@mrleebo/prisma-ast";
+import { mapCombinedLine } from "../schema/load-schema.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
 interface R02Config {
@@ -36,7 +36,7 @@ export const r02: Rule = {
     const ignoreModels = new Set(config.ignoreModels ?? []);
     const ignoreRelations = new Set(config.ignoreRelations ?? []);
 
-    const source = await readFile(ctx.schemaPath, "utf8");
+    const source = ctx.schemaSource;
     const schema = getSchema(source);
     const sourceLines = source.split("\n");
     const modelLineRanges = computeModelLineRanges(sourceLines);
@@ -74,16 +74,21 @@ export const r02: Rule = {
         // inside the model's line range. If anything goes wrong the rule still
         // returns line 1 — useful as a stable scope anchor.
         const range = modelLineRanges.get(modelName);
-        const line =
+        const combinedLine =
           lineOf(relation) ??
           (range ? findFieldLine(sourceLines, range, field.name) : undefined) ??
           1;
+        // Translate combined-source coordinates back to the original `.prisma`
+        // file. For single-file projects this is a no-op; for multi-file
+        // (Prisma 5.15+ `prismaSchemaFolder`) this maps the line into
+        // bounty.prisma:5 instead of the synthetic combined position.
+        const origin = mapCombinedLine(combinedLine, ctx.schemaSourceMap, ctx.schemaPath);
 
         findings.push({
           ruleId: "R02",
           severity: options.severity,
           message: `Relation ${fqRelation} is missing explicit ${missing.join(" and ")}.`,
-          location: { file: ctx.schemaPath, line },
+          location: { file: origin.file, line: origin.line },
           suggestion: missing
             .map((k) => `Add \`${k}: <action>\` to the @relation arguments.`)
             .join(" "),

@@ -32,6 +32,7 @@ import {
   type Symbol as TsMorphSymbol,
   type VariableDeclaration,
 } from "ts-morph";
+import { resolveEnumIdentifier } from "./enum-resolve.js";
 
 export interface ZodSchemaInfo {
   /** Variable name (e.g. "userSchema"). */
@@ -45,7 +46,21 @@ export interface ZodSchemaInfo {
 
 export type ZodShape =
   | { kind: "object"; fields: ZodField[] }
-  | { kind: "enum"; values: string[]; nativeEnumName?: string }
+  | {
+      kind: "enum";
+      values: string[];
+      nativeEnumName?: string;
+      /**
+       * Set when the source form was the Zod 4 native-enum syntax
+       * `z.enum(IDENT)`. Values may have been resolved through a TS-side
+       * declaration (`enum X` or `const X = {...} as const`); when they
+       * couldn't be, `values` stays empty and the matcher falls back to
+       * an identifier-name match against the Prisma enum registry. R03
+       * skips silently and emits an info-level note when both resolution
+       * paths fail.
+       */
+      enumIdentifier?: string;
+    }
   | { kind: "derived"; baseIdentifier: string; origin?: DerivationOrigin; chain: ZodChainCall[] }
   | { kind: "other"; expression: string };
 
@@ -86,6 +101,21 @@ export interface ZodField {
    * (e.g. "BookingStatus" for z.nativeEnum(BookingStatus) or z.nativeEnum(prisma.BookingStatus)).
    */
   nativeEnumName?: string;
+  /**
+   * Identifier referenced when baseType is "enum" and the source form was
+   * the Zod 4 native-enum shorthand `z.enum(IDENT)` (no array literal).
+   * `enumValues` may also be populated when the identifier resolves to a
+   * TS `enum X` or `const X = {...} as const` declaration; otherwise R03
+   * matches by identifier name only.
+   */
+  enumIdentifier?: string;
+  /**
+   * `false` when baseType is "enum", an `enumIdentifier` was present, and
+   * neither TS-side resolution nor name-match against the Prisma registry
+   * could turn it into something checkable. R03 treats this as a deferred
+   * non-finding plus an info-level note.
+   */
+  enumResolved?: boolean;
   /** Character offset (start, inclusive) of the entire field value expression. Used for codemods. */
   exprStart: number;
   /** Character offset (end, exclusive) of the entire field value expression. Used for codemods. */
@@ -197,7 +227,10 @@ function mentionsKnownDerivationBase(source: string): boolean {
 
 function hasZodImport(source: string): boolean {
   // Quick reject — avoids paying for ts-morph parse on files that don't use zod.
-  return /from\s+["']zod["']/.test(source);
+  // Matches `from "zod"`, `from "zod/v3"`, and `from "zod/v4"` (the Zod 4
+  // namespace import path that lets a project pin to a specific major during
+  // the 3→4 transition).
+  return /from\s+["']zod(\/v[34])?["']/.test(source);
 }
 
 function extractFromSourceFile(sourceFile: SourceFile, outputDir?: string): ZodSchemaInfo[] {
@@ -283,6 +316,17 @@ function extractShape(rootCall: CallExpression): ZodShape | undefined {
       }
       return { kind: "enum", values };
     }
+    // Zod 4 native-enum shorthand: `z.enum(IDENT)`. Try TS-side resolution
+    // first; if the identifier doesn't reach a TS enum or `as const` literal,
+    // hand the bare name back to R03 for a Prisma-registry name-match.
+    if (Node.isIdentifier(arrayNode)) {
+      const ident = arrayNode.getText();
+      const resolved = resolveEnumIdentifier(arrayNode);
+      if (resolved) {
+        return { kind: "enum", values: resolved.values, enumIdentifier: ident };
+      }
+      return { kind: "enum", values: [], enumIdentifier: ident };
+    }
   }
 
   if (root.method === "nativeEnum" && root.argNodes[0]) {
@@ -361,17 +405,28 @@ function findBaseCall(initializer: CallExpression): CallExpression {
 function extractEnumExtras(
   baseType: string,
   step: ChainStep,
-): Pick<ZodField, "enumValues" | "nativeEnumName"> {
+): Pick<ZodField, "enumValues" | "nativeEnumName" | "enumIdentifier" | "enumResolved"> {
   if (baseType === "enum") {
-    const arrayNode = step.argNodes[0];
-    if (arrayNode && Node.isArrayLiteralExpression(arrayNode)) {
+    const arg = step.argNodes[0];
+    if (arg && Node.isArrayLiteralExpression(arg)) {
       const values: string[] = [];
-      for (const el of arrayNode.getElements()) {
+      for (const el of arg.getElements()) {
         if (Node.isStringLiteral(el) || Node.isNoSubstitutionTemplateLiteral(el)) {
           values.push(el.getLiteralText());
         }
       }
-      return { enumValues: values };
+      return { enumValues: values, enumResolved: true };
+    }
+    // Zod 4 shorthand: `z.enum(IDENT)`. Either values come from a local TS
+    // enum / `as const` declaration, or we keep just the identifier so R03
+    // can name-match it against the Prisma registry.
+    if (arg && Node.isIdentifier(arg)) {
+      const ident = arg.getText();
+      const resolved = resolveEnumIdentifier(arg);
+      if (resolved) {
+        return { enumValues: resolved.values, enumIdentifier: ident, enumResolved: true };
+      }
+      return { enumIdentifier: ident, enumResolved: false };
     }
   }
   if (baseType === "nativeEnum") {

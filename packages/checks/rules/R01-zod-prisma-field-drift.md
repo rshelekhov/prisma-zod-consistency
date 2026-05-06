@@ -116,9 +116,10 @@ export const createUserInputSchema = UserSchema.pick({
 {
   "R01": {
     "severity": "error",
-    "modes": ["R01a", "R01b", "R01c"],     // override auto-detection
-    "ignoreModels": ["AuditLog"],          // models to skip entirely
-    "knownGenerators": [                   // extend the recognized generator list
+    "modes": ["R01a", "R01b", "R01c"],         // override auto-detection
+    "ignoreModels": ["AuditLog"],              // models to skip entirely
+    "directionalityMode": "strict",            // see below — 0.8.0+
+    "knownGenerators": [                       // extend the recognized generator list
       "zod-prisma-types",
       "prisma-zod-generator",
       "zod-prisma"
@@ -126,6 +127,24 @@ export const createUserInputSchema = UserSchema.pick({
   }
 }
 ```
+
+### Directionality (0.8.0+)
+
+R01 classifies every detected mismatch by **direction**:
+
+- **`zod-weaker`** — the Zod schema accepts payloads that the database will reject. `z.number()` for an `Int` column, `z.string()` without `.max(N)` for `@db.VarChar(N)`, missing `.array(...)` for a Prisma list. Always actionable.
+- **`zod-stricter`** — the Zod schema **refines** what Prisma allows. `z.email()` for `String`, `z.array(z.enum(...))` for `Json`, `z.url()` for a generic `String` column. Often intentional — the team wants tighter input validation than the column contract requires.
+- **`type-mismatch`** — incompatible base types (`DateTime` vs `z.string()`). Runtime failure possible regardless of direction.
+
+The `R01.directionalityMode` option controls how `zod-stricter` issues are surfaced:
+
+| Mode | Behaviour |
+|---|---|
+| `"strict"` (default) | All directions fire at the rule's severity. Backwards-compatible with 0.7.x. |
+| `"actionable"` | `zod-stricter` issues drop to `info`; `zod-weaker` and `type-mismatch` keep their full severity. **Recommended** — drops the false-positive noise that `z.email()`/`z.url()` patterns generated on Zod 4 codebases. |
+| `"off-stricter"` | `zod-stricter` issues are filtered out entirely. |
+
+The default will switch to `"actionable"` in 1.0.0 (announced as a breaking change in the 1.0.0 changelog). Until then, set it explicitly in your config when you're ready.
 
 ## Suppression
 

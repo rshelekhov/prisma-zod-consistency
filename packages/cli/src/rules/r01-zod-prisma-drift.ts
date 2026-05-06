@@ -21,11 +21,12 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import {
   type FieldInfo,
   type PrismaModelRegistry,
-  loadPrismaRegistry,
+  parsePrismaRegistry,
 } from "../schema/prisma-models.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 import { classifySchema } from "../zod/classify.js";
 import {
+  type DriftDirection,
   type LooseMaxIssue,
   type MissingIntIssue,
   type MissingMaxIssue,
@@ -37,8 +38,26 @@ import { loadGeneratedRegistry } from "../zod/generated-registry.js";
 import { matchSchemasToModels } from "../zod/match.js";
 import { detectWeakening } from "../zod/weaken.js";
 
+/**
+ * R01 directionality mode (0.8.0).
+ *
+ * - `"strict"` (default): every detected drift fires at the rule's normal
+ *   severity. Backwards-compatible with 0.7.x.
+ * - `"actionable"`: `zod-stricter` issues drop to `info` severity (intent,
+ *   not bug); `zod-weaker` and `type-mismatch` keep their full severity.
+ *   Recommended for marketing-rollout users — drops the false-positive
+ *   noise on `z.email()`/`z.url()`/`z.array()` patterns.
+ * - `"off-stricter"`: filter `zod-stricter` issues out entirely. For
+ *   shops who never want to be reminded about intentional refinements.
+ *
+ * Switching the default to `"actionable"` is planned for 1.0.0; for now we
+ * prefer not to perturb the report counts of users on green-CI 0.7.x.
+ */
+type R01DirectionalityMode = "strict" | "actionable" | "off-stricter";
+
 interface R01Config {
   ignoreModels?: string[];
+  directionalityMode?: R01DirectionalityMode;
 }
 
 export const r01: Rule = {
@@ -53,9 +72,12 @@ export const r01: Rule = {
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {
     const config = options.config as R01Config;
     const ignoreModels = new Set(config.ignoreModels ?? []);
+    const directionalityMode: R01DirectionalityMode = config.directionalityMode ?? "strict";
 
-    const registry = await loadPrismaRegistry(ctx.schemaPath);
-    const findings: Finding[] = [];
+    const registry = parsePrismaRegistry(ctx.schemaSource);
+    // Pair each finding with its drift direction so the post-processing pass
+    // can downgrade or filter `zod-stricter` issues without losing the rest.
+    const tagged: Array<{ finding: Finding; direction: DriftDirection }> = [];
 
     const outputDirAbs = resolveOutputDir(ctx);
     const generatedRegistry =
@@ -76,6 +98,7 @@ export const r01: Rule = {
     const objectMatches = matchSchemasToModels(
       userSchemas.filter((s) => s.shape.kind === "object"),
       registry,
+      ctx.namingPrefixes,
     );
     const modelByName = new Map(objectMatches.map((m) => [m.zod.name, m.modelName]));
 
@@ -92,13 +115,18 @@ export const r01: Rule = {
         if (!model) continue;
         const issues = compareModelToSchemaShape(model.fields, schema, registry);
         for (const issue of issues) {
-          findings.push(formatR01aFinding(issue, options));
+          tagged.push({ finding: formatR01aFinding(issue, options), direction: issue.direction });
         }
       } else if (classification === "r01c") {
         if (schema.shape.kind !== "derived" || !schema.shape.origin) continue;
         const weak = detectWeakening(schema);
         for (const issue of weak) {
-          findings.push(formatR01cFinding(issue, options));
+          // R01c findings (`.passthrough()`, `.nonstrict()`) are by definition
+          // weakening of the generated origin — not refinements.
+          tagged.push({
+            finding: formatR01cFinding(issue, options),
+            direction: "zod-weaker",
+          });
         }
       }
       // r01b is handled below over generated schemas, not user schemas.
@@ -113,14 +141,44 @@ export const r01: Rule = {
         if (!model) continue;
         const issues = compareModelToSchemaShape(model.fields, schema, registry);
         for (const issue of issues) {
-          findings.push(formatR01bFinding(issue, options, generatedRegistry.generator));
+          tagged.push({
+            finding: formatR01bFinding(issue, options, generatedRegistry.generator),
+            direction: issue.direction,
+          });
         }
       }
     }
 
-    return findings;
+    return applyDirectionalityMode(tagged, directionalityMode);
   },
 };
+
+/**
+ * Post-process tagged findings according to the configured directionality
+ * mode. See `R01DirectionalityMode` for semantics.
+ */
+function applyDirectionalityMode(
+  tagged: ReadonlyArray<{ finding: Finding; direction: DriftDirection }>,
+  mode: R01DirectionalityMode,
+): Finding[] {
+  if (mode === "strict") {
+    return tagged.map((t) => t.finding);
+  }
+  const out: Finding[] = [];
+  for (const { finding, direction } of tagged) {
+    if (direction !== "zod-stricter") {
+      out.push(finding);
+      continue;
+    }
+    if (mode === "off-stricter") {
+      continue; // drop entirely
+    }
+    // mode === "actionable": downgrade severity to info, but keep the
+    // diagnostic so the user can review.
+    out.push({ ...finding, severity: "info" });
+  }
+  return out;
+}
 
 /**
  * R01a finding: hand-written Zod drifted from Prisma. Severity from options

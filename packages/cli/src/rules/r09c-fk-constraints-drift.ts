@@ -21,7 +21,7 @@
  */
 
 import type { DbForeignKey } from "../db/types.js";
-import { loadPrismaRegistry } from "../schema/prisma-models.js";
+import { parsePrismaRegistry } from "../schema/prisma-models.js";
 import { type ExpectedForeignKey, extractExpectedForeignKeys } from "../schema/prisma-relations.js";
 import type { Finding, ProjectContext, Rule, RuleOptions } from "../types.js";
 
@@ -42,7 +42,7 @@ export const r09c: Rule = {
 
   async run(ctx: ProjectContext, options: RuleOptions): Promise<Finding[]> {
     if (!ctx.db) return [];
-    const registry = await loadPrismaRegistry(ctx.schemaPath);
+    const registry = parsePrismaRegistry(ctx.schemaSource);
     const expected = extractExpectedForeignKeys(registry);
     return diffForeignKeys(expected, ctx.db.foreignKeys, options);
   },

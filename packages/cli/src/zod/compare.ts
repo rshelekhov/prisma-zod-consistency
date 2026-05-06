@@ -22,10 +22,28 @@ export type SchemaIssue =
   | MissingMaxIssue
   | LooseMaxIssue;
 
+/**
+ * Directionality classification (0.8.0): how the Zod surface differs from
+ * Prisma's contract. Drives `R01.directionalityMode` for severity tuning —
+ * see `r01-zod-prisma-drift.ts`.
+ *
+ * - `zod-weaker`: Zod accepts payloads that Prisma will reject at write
+ *   time (`z.number()` for `Int`, `z.string()` without `.max()` for
+ *   `@db.VarChar(N)`). Always actionable.
+ * - `zod-stricter`: Zod refines a value Prisma would accept (`z.email()`
+ *   for `String`, `z.array(...)` for `Json`). Often intentional — the
+ *   team wants tighter input validation than the column allows.
+ * - `type-mismatch`: incompatible base types (`DateTime` vs `z.string()`).
+ *   Runtime failure possible regardless of direction.
+ */
+export type DriftDirection = "zod-weaker" | "zod-stricter" | "type-mismatch";
+
 export interface BaseIssue {
   prismaField: FieldInfo;
   zodField: ZodField;
   zod: ZodSchemaInfo;
+  /** How Zod and Prisma disagree — see `DriftDirection`. */
+  direction: DriftDirection;
 }
 
 export interface TypeMismatchIssue extends BaseIssue {
@@ -122,6 +140,9 @@ function checkType(
         zod,
         expectedInner: expectedZodBaseTypes(prismaField.type),
         actual: zodField.baseType,
+        // Prisma is array; Zod is a single value of the inner type. The Zod
+        // schema accepts what Prisma will reject (a non-array payload).
+        direction: "zod-weaker",
       };
     }
     return undefined;
@@ -138,6 +159,7 @@ function checkType(
       zod,
       expected,
       actual: zodField.baseType,
+      direction: classifyTypeMismatchDirection(prismaField.type, zodField.baseType),
     };
   }
 
@@ -148,10 +170,51 @@ function checkType(
       zodField,
       zod,
       insertPos: insertBeforeNullishModifiers(zodField),
+      // `z.number()` without `.int()` accepts `1.5`, which `Int` rejects.
+      direction: "zod-weaker",
     };
   }
 
   return undefined;
+}
+
+/**
+ * String-format refinements provided by Zod's chaining surface — `z.email()`,
+ * `z.url()`, etc. When Prisma has plain `String` but the Zod schema is one
+ * of these, the Zod surface is strictly tighter than the column contract,
+ * not drifted from it.
+ */
+const ZOD_STRING_REFINEMENTS = new Set([
+  "email",
+  "url",
+  "uuid",
+  "cuid",
+  "cuid2",
+  "ulid",
+  "nanoid",
+  "ip",
+  "ipv4",
+  "ipv6",
+  "datetime",
+  "duration",
+  "regex",
+  "base64",
+  "base64url",
+  "jwt",
+  "emoji",
+  "iso",
+  "literal",
+]);
+
+function classifyTypeMismatchDirection(prismaType: string, zodActual: string): DriftDirection {
+  // `String` plus a Zod string-format refinement: tighter, not wrong.
+  if (prismaType === "String" && ZOD_STRING_REFINEMENTS.has(zodActual)) {
+    return "zod-stricter";
+  }
+  // `Json` is structurally the loosest Prisma type. Anything more concrete
+  // on the Zod side (object, array, specific scalar, …) is a refinement.
+  if (prismaType === "Json") return "zod-stricter";
+  return "type-mismatch";
 }
 
 function checkVarcharMax(
@@ -173,6 +236,8 @@ function checkVarcharMax(
       dbSize,
       dbKind: dbKind ?? "",
       insertPos: insertBeforeNullishModifiers(zodField),
+      // No `.max()` lets through strings the column will truncate or reject.
+      direction: "zod-weaker",
     };
   }
 
@@ -187,6 +252,7 @@ function checkVarcharMax(
       dbKind: dbKind ?? "",
       zodMax,
       ...(arr ? { maxArgRange: arr } : {}),
+      direction: "zod-weaker",
     };
   }
 

@@ -6,8 +6,11 @@ import { type ResolvedConfig, type RuleConfig, loadConfig } from "./config.js";
 import { isDbProviderSupported, snapshotDatabase } from "./db/index.js";
 import { discover } from "./discovery.js";
 import { DB_RULES, allRules, getRule } from "./rules/index.js";
+import { parsePrismaRegistry } from "./schema/prisma-models.js";
 import { clearSuppressionCache, getSuppressionMap } from "./suppression.js";
 import type { Finding, ProjectContext, Rule, RuleId, Severity } from "./types.js";
+import { discoverZodSchemas } from "./zod/discover.js";
+import { matchSchemasToModels } from "./zod/match.js";
 
 export interface RunOptions {
   cwd?: string;
@@ -35,6 +38,25 @@ export interface RunResult {
    * meant for the human reading the terminal.
    */
   warnings: string[];
+  /**
+   * Discovery-level counts (UX bug #5, 0.8.0). Populated when at least one
+   * static Zod-aware rule (R01/R03/R04) ran, so the CLI's pretty output
+   * can disambiguate "tool worked, project was clean" from "tool didn't
+   * see what it expected" — the latter case used to surface as the same
+   * `✓ no findings` regardless of cause.
+   */
+  summary?: RunSummary;
+}
+
+export interface RunSummary {
+  /** Number of Prisma models in the schema. */
+  prismaModelCount: number;
+  /** Number of object-shaped Zod schemas R01/R03/R04 considered. */
+  zodSchemaCount: number;
+  /** Subset of `zodSchemaCount` that matched a Prisma model after name normalization. */
+  matchedSchemaCount: number;
+  /** Naming prefixes the matcher applied (default `["Z"]`). */
+  namingPrefixes: readonly string[];
 }
 
 export async function run(options: RunOptions = {}): Promise<RunResult> {
@@ -114,12 +136,47 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
 
   const filtered = await applySuppressions(findings, config);
 
+  const summary = await maybeBuildSummary(ctx, ran);
+
   return {
     findings: filtered,
     ranRules: ran,
     skippedRules: skipped,
     rootDir: ctx.rootDir,
     warnings,
+    ...(summary ? { summary } : {}),
+  };
+}
+
+/**
+ * Static Zod-aware rules whose presence justifies emitting a discovery
+ * summary at the end of the run. R02 (relations only), R05 (server-action
+ * scan), and the live-DB family don't tell the user anything new about
+ * Prisma↔Zod coverage, so we don't bother with the extra ts-morph pass
+ * when only those ran.
+ */
+const SUMMARY_RULES: ReadonlySet<RuleId> = new Set<RuleId>(["R01", "R03", "R04"]);
+
+async function maybeBuildSummary(
+  ctx: ProjectContext,
+  ran: RuleId[],
+): Promise<RunSummary | undefined> {
+  if (!ran.some((id) => SUMMARY_RULES.has(id))) return undefined;
+
+  // The cost of this is one extra Prisma parse plus a single ts-morph pass
+  // over the source files — measured in single-digit seconds even on
+  // dub-sized projects. Worth it for the clarity boost on retention-critical
+  // first-run paths.
+  const registry = parsePrismaRegistry(ctx.schemaSource);
+  const zodSchemas = await discoverZodSchemas(ctx.sourceFiles);
+  const objectSchemas = zodSchemas.filter((s) => s.shape.kind === "object");
+  const matches = matchSchemasToModels(objectSchemas, registry, ctx.namingPrefixes);
+
+  return {
+    prismaModelCount: registry.models.size,
+    zodSchemaCount: objectSchemas.length,
+    matchedSchemaCount: matches.length,
+    namingPrefixes: ctx.namingPrefixes,
   };
 }
 
