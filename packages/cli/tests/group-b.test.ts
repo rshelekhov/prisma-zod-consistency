@@ -64,6 +64,45 @@ describe("R08 — unused indexes", () => {
     const findings = findUnused(indexes, usage, opts());
     expect(findings).toEqual([]);
   });
+
+  // B4: unique non-PK indexes show idx_scan = 0 under Postgres / MySQL stats
+  // even when they're enforcing constraints on the insert path. By default we
+  // skip them to avoid steady-state noise on Prisma `@unique` columns.
+  it("does not flag unique non-PK indexes by default", () => {
+    const indexes: DbIndex[] = [
+      idx({ indexName: "users_email_unique", columns: ["email"], isUnique: true }),
+    ];
+    const usage: DbIndexUsage[] = [
+      use({
+        indexName: "users_email_unique",
+        idxScan: 0,
+        tableSeqScan: 100,
+        approxRowCount: 50_000,
+      }),
+    ];
+    const findings = findUnused(indexes, usage, opts());
+    expect(findings).toEqual([]);
+  });
+
+  it("flags unique non-PK indexes when includeUnique=true (explicit audit)", () => {
+    const indexes: DbIndex[] = [
+      idx({ indexName: "users_email_unique", columns: ["email"], isUnique: true }),
+    ];
+    const usage: DbIndexUsage[] = [
+      use({
+        indexName: "users_email_unique",
+        idxScan: 0,
+        tableSeqScan: 100,
+        approxRowCount: 50_000,
+      }),
+    ];
+    const findings = findUnused(indexes, usage, {
+      severity: "info",
+      config: { includeUnique: true },
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain("users_email_unique");
+  });
 });
 
 describe("R09 — schema drift vs DB", () => {
@@ -173,6 +212,7 @@ function col(p: Partial<DbColumn>): DbColumn {
     udtName: "text",
     isNullable: false,
     characterMaximumLength: null,
+    columnDefault: null,
     ...p,
   };
 }

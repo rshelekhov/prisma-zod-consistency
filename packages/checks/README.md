@@ -62,8 +62,11 @@ Related rules.
 | R05 | API boundary bypass (Hono, tRPC, Next.js) | warning | CLI + skill | — | done (Hono + tRPC + Next) |
 | R06 | Missing index for `where`/`orderBy` (contextual) | info | skill only | — | skill-only by design |
 | R07 | Redundant indexes (live DB) | info | CLI `--db` + skill | — | done (Postgres + MySQL + SQLite) |
-| R08 | Unused indexes (live DB) | info | CLI `--db` + skill | — | done (Postgres + MySQL); skipped on SQLite (provider doesn't track index usage) |
+| R08 | Unused indexes (live DB) | info | CLI `--db` + skill | — | done (Postgres + MySQL); skipped on SQLite. Excludes unique non-PK indexes by default (opt-in via `R08.includeUnique`) |
 | R09 | Schema drift vs live DB | warning | CLI `--db` + skill | — | done (column-level on Postgres + MySQL + SQLite) |
+| R09b | Type drift vs live DB | warning | CLI `--db` + skill | — | done (Postgres + MySQL); skipped on SQLite (affinity-based typing) |
+| R09c | FK constraints drift vs live DB | warning | CLI `--db` + skill | — | done (Postgres + MySQL + SQLite) |
+| R09d | Default-value drift vs live DB | warning | CLI `--db` + skill | — | done (Postgres + MySQL + SQLite) |
 | R10 | N+1 queries | info | skill only | — | skill-only by design |
 | R11 | `select: { id: true }` for existence checks | info | skill only | partial | skill-only by design |
 

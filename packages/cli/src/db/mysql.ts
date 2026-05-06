@@ -36,7 +36,15 @@
  */
 
 import type { Pool as Mysql2Pool, RowDataPacket } from "mysql2/promise";
-import type { DbColumn, DbConnectOptions, DbIndex, DbIndexUsage, DbSnapshot } from "./types.js";
+import type {
+  DbColumn,
+  DbConnectOptions,
+  DbForeignKey,
+  DbIndex,
+  DbIndexUsage,
+  DbSnapshot,
+  ForeignKeyAction,
+} from "./types.js";
 
 const DEFAULT_EXCLUDE_TABLES = ["_prisma_migrations"];
 
@@ -67,6 +75,25 @@ interface ColumnRow {
   data_type: string;
   is_nullable: "YES" | "NO";
   character_maximum_length: number | null;
+  column_default: string | null;
+}
+
+/**
+ * One row per FK column from `INFORMATION_SCHEMA.KEY_COLUMN_USAGE`, joined
+ * against `REFERENTIAL_CONSTRAINTS` for the action codes. Multi-column FKs
+ * land as multiple rows with the same `constraint_name` and ascending
+ * `ordinal_position`.
+ */
+interface FkRow {
+  schema_name: string;
+  table_name: string;
+  constraint_name: string;
+  column_name: string;
+  ordinal_position: number;
+  referenced_table: string;
+  referenced_column: string;
+  delete_rule: string;
+  update_rule: string;
 }
 
 export async function snapshotMysql(opts: DbConnectOptions): Promise<DbSnapshot> {
@@ -83,17 +110,19 @@ export async function snapshotMysql(opts: DbConnectOptions): Promise<DbSnapshot>
   const excludeTables = new Set([...DEFAULT_EXCLUDE_TABLES, ...(opts.excludeTables ?? [])]);
 
   try {
-    const [indexes, indexUsage, columns, usageTrackingOn] = await Promise.all([
+    const [indexes, indexUsage, columns, foreignKeys, usageTrackingOn] = await Promise.all([
       fetchIndexes(pool, schema, excludeTables),
       fetchIndexUsage(pool, schema, excludeTables),
       fetchColumns(pool, schema, excludeTables),
+      fetchForeignKeys(pool, schema, excludeTables),
       probePerformanceSchema(pool),
     ]);
     return {
       indexes,
       indexUsage,
       columns,
-      capabilities: { indexUsageTracking: usageTrackingOn },
+      foreignKeys,
+      capabilities: { indexUsageTracking: usageTrackingOn, typeDriftAccurate: true },
     };
   } finally {
     await pool.end();
@@ -223,7 +252,8 @@ async function fetchColumns(pool: Pool, schema: string, exclude: Set<string>): P
        COLUMN_NAME               AS column_name,
        DATA_TYPE                 AS data_type,
        IS_NULLABLE               AS is_nullable,
-       CHARACTER_MAXIMUM_LENGTH  AS character_maximum_length
+       CHARACTER_MAXIMUM_LENGTH  AS character_maximum_length,
+       COLUMN_DEFAULT            AS column_default
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = ?
      ORDER BY TABLE_NAME, ORDINAL_POSITION`,
@@ -245,7 +275,92 @@ export function mapColumnRows(rows: ColumnRow[], exclude: Set<string>): DbColumn
       udtName: r.data_type,
       isNullable: r.is_nullable === "YES",
       characterMaximumLength: r.character_maximum_length,
+      columnDefault: r.column_default,
     }));
+}
+
+async function fetchForeignKeys(
+  pool: Pool,
+  schema: string,
+  exclude: Set<string>,
+): Promise<DbForeignKey[]> {
+  // KEY_COLUMN_USAGE has the source/target columns and ordinal positions;
+  // REFERENTIAL_CONSTRAINTS carries DELETE_RULE / UPDATE_RULE. We join on the
+  // constraint name (within the same schema). Multi-column FKs come back as
+  // multiple rows with the same constraint_name and ascending ordinal_position.
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT
+       kcu.TABLE_SCHEMA              AS schema_name,
+       kcu.TABLE_NAME                AS table_name,
+       kcu.CONSTRAINT_NAME           AS constraint_name,
+       kcu.COLUMN_NAME               AS column_name,
+       kcu.ORDINAL_POSITION          AS ordinal_position,
+       kcu.REFERENCED_TABLE_NAME     AS referenced_table,
+       kcu.REFERENCED_COLUMN_NAME    AS referenced_column,
+       rc.DELETE_RULE                AS delete_rule,
+       rc.UPDATE_RULE                AS update_rule
+     FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+     JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+       ON rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+      AND rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
+     WHERE kcu.TABLE_SCHEMA = ?
+       AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+     ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`,
+    [schema],
+  );
+
+  return groupMysqlForeignKeyRows(rows as unknown as FkRow[], exclude);
+}
+
+/**
+ * Pure mapping — exposed for tests. Groups multi-column FK rows by
+ * `(schema, table, constraint_name)` and emits one DbForeignKey per group with
+ * `columns` / `referencedColumns` parallel arrays in `ordinal_position` order.
+ *
+ * MySQL `REFERENTIAL_CONSTRAINTS.DELETE_RULE` / `UPDATE_RULE` come as the
+ * SQL-standard text ("CASCADE", "RESTRICT", "NO ACTION", "SET NULL",
+ * "SET DEFAULT") — lowercased they match `ForeignKeyAction` directly.
+ */
+export function groupMysqlForeignKeyRows(rows: FkRow[], exclude: Set<string>): DbForeignKey[] {
+  const byKey = new Map<string, DbForeignKey>();
+  for (const r of rows) {
+    if (exclude.has(r.table_name)) continue;
+    const key = `${r.schema_name}.${r.table_name}.${r.constraint_name}`;
+    let entry = byKey.get(key);
+    if (!entry) {
+      entry = {
+        schemaName: r.schema_name,
+        tableName: r.table_name,
+        constraintName: r.constraint_name,
+        columns: [],
+        referencedTable: r.referenced_table,
+        referencedColumns: [],
+        onDelete: mysqlActionFromText(r.delete_rule),
+        onUpdate: mysqlActionFromText(r.update_rule),
+      };
+      byKey.set(key, entry);
+    }
+    // Rows arrive sorted by ORDINAL_POSITION; safe to push in order.
+    entry.columns.push(r.column_name);
+    entry.referencedColumns.push(r.referenced_column);
+  }
+  return [...byKey.values()];
+}
+
+function mysqlActionFromText(text: string): ForeignKeyAction {
+  switch (text.toUpperCase().trim()) {
+    case "CASCADE":
+      return "cascade";
+    case "RESTRICT":
+      return "restrict";
+    case "SET NULL":
+      return "set null";
+    case "SET DEFAULT":
+      return "set default";
+    default:
+      // "NO ACTION" or any unknown — bucket into the SQL standard default.
+      return "no action";
+  }
 }
 
 /**

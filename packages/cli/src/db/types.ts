@@ -54,12 +54,17 @@ export interface DbIndexUsage {
  *   - mysql    → `INFORMATION_SCHEMA.COLUMNS`
  *   - sqlite   → `PRAGMA table_info(...)`
  *
- * Provider-specific notes (R09b will tighten these):
+ * Provider-specific notes:
  *   - `udtName` mirrors Postgres `udt_name` (e.g. "varchar", "int4"). For MySQL
  *     we copy `DATA_TYPE` (e.g. "varchar", "int"); for SQLite we copy the
- *     declared type lowercased (e.g. "integer", "text").
+ *     declared type lowercased (e.g. "integer", "text"). R09b consumes this
+ *     for type-drift comparison; precision is provider-dependent.
  *   - `characterMaximumLength` is `null` on SQLite (no enforced length) and
  *     for non-string types on every provider.
+ *   - `columnDefault` is the raw default expression as the provider reports
+ *     it (e.g. `'draft'::text` on Postgres, `'draft'` on MySQL,
+ *     `'draft'` or `NULL` on SQLite). R09d normalizes both sides before
+ *     comparison; consumers shouldn't string-compare directly.
  */
 export interface DbColumn {
   schemaName: string;
@@ -71,7 +76,43 @@ export interface DbColumn {
   udtName: string;
   isNullable: boolean;
   characterMaximumLength: number | null;
+  /** Raw DEFAULT expression as the provider reports it. `null` when the column has no DEFAULT. */
+  columnDefault: string | null;
 }
+
+/**
+ * A foreign-key constraint as reported by the provider.
+ *
+ * Sources by provider:
+ *   - postgres → `pg_constraint` (contype = 'f') + `pg_attribute`
+ *   - mysql    → `INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS` + `KEY_COLUMN_USAGE`
+ *   - sqlite   → `PRAGMA foreign_key_list(<table>)` per table
+ *
+ * Multi-column FKs are emitted as a single entry whose `columns[i]` references
+ * `referencedColumns[i]` (parallel arrays in declaration order).
+ *
+ * `onDelete` / `onUpdate` are normalized to the lowercase action vocabulary
+ * SQL standard uses; missing actions default to `"no action"`.
+ */
+export interface DbForeignKey {
+  schemaName: string;
+  tableName: string;
+  /** FK constraint name as the DB knows it. */
+  constraintName: string;
+  /** Source columns. */
+  columns: string[];
+  /** Referenced table. */
+  referencedTable: string;
+  /** Referenced columns (parallel to `columns`). */
+  referencedColumns: string[];
+  /** Action on DELETE. Normalized vocabulary across providers. */
+  onDelete: ForeignKeyAction;
+  /** Action on UPDATE. Same normalization. */
+  onUpdate: ForeignKeyAction;
+}
+
+/** SQL-standard referential-action vocabulary, lowercased and normalized across providers. */
+export type ForeignKeyAction = "cascade" | "restrict" | "no action" | "set null" | "set default";
 
 /**
  * Provider-level capabilities exposed by the snapshot. Consumed by rules that
@@ -86,6 +127,16 @@ export interface DbCapabilities {
    * R08 silently skips when this is `false`.
    */
   indexUsageTracking: boolean;
+  /**
+   * Whether the underlying provider reports column types precisely enough for
+   * R09b (type drift) to make meaningful comparisons.
+   * - `true`  → Postgres (`udt_name` + `character_maximum_length`), MySQL
+   *            (`DATA_TYPE` + `character_maximum_length`).
+   * - `false` → SQLite — its column types are affinities, declared lengths
+   *            are not enforced, and `VARCHAR(100)` vs `varchar(255)` is
+   *            indistinguishable. R09b silently skips when this is `false`.
+   */
+  typeDriftAccurate: boolean;
 }
 
 /** Bundle handed to Group B rules. */
@@ -93,5 +144,7 @@ export interface DbSnapshot {
   indexes: DbIndex[];
   indexUsage: DbIndexUsage[];
   columns: DbColumn[];
+  /** Foreign-key constraints — consumed by R09c (FK constraints drift). */
+  foreignKeys: DbForeignKey[];
   capabilities: DbCapabilities;
 }

@@ -73,6 +73,14 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
         }`,
       );
     }
+
+    // Same shape for R09b: when explicitly requested but the provider's type
+    // metadata isn't precise enough for type-drift comparison, warn once.
+    if (requested.includes("R09b") && !ctx.db.capabilities.typeDriftAccurate) {
+      warnings.push(
+        `R09b (type drift) was requested but ${ctx.provider} reports column types via affinity, not declared length/precision — drift comparison would produce noise. R09b will be skipped on this provider.`,
+      );
+    }
   }
 
   const findings: Finding[] = [];

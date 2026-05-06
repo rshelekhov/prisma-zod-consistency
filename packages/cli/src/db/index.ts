@@ -75,7 +75,9 @@ export type {
   DbCapabilities,
   DbColumn,
   DbConnectOptions,
+  DbForeignKey,
   DbIndex,
   DbIndexUsage,
   DbSnapshot,
+  ForeignKeyAction,
 } from "./types.js";

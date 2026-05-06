@@ -17,7 +17,7 @@ An index is reported as "unused" when:
 2. The parent table has done meaningful sequential-scan work (`pg_stat_user_tables.seq_scan > 0`) — i.e. the table is alive, just not using this particular index, AND
 3. The table has at least `minRowCount` rows (default 1000) — Postgres legitimately picks `seq_scan` over an index on tiny tables, so unused indexes there are not necessarily wasteful.
 
-Primary keys are excluded automatically.
+Primary keys and unique non-PK indexes are excluded automatically. Unique non-PK indexes are skipped because Postgres / MySQL use them for constraint enforcement (on every insert/update), which doesn't increment `idx_scan` / `count_read` — so a perfectly-functioning unique index looks "unused" by this metric. Opt back in via `R08.includeUnique = true` if you want to audit unique indexes explicitly.
 
 ## Why it matters
 
@@ -68,12 +68,15 @@ pg_stat_user_indexes:
   "R08": {
     "severity": "info",
     "minRowCount": 1000,
-    "ignoreIndexes": ["_pkey$", "^contacts_legacy_"]   // regex patterns
+    "ignoreIndexes": ["_pkey$", "^contacts_legacy_"],  // regex patterns
+    "includeUnique": false                             // audit unique non-PK indexes too (off by default)
   }
 }
 ```
 
 `ignoreIndexes` is regex-tested against the index name. Useful for grandfathered indexes you've decided to keep despite the signal.
+
+`includeUnique` re-enables flagging of unique non-PK indexes. Off by default — see "Unique-index exclusion" below for why. Turn it on if you want a one-off audit and accept the false-positive rate.
 
 ## Common false positives
 
@@ -86,7 +89,7 @@ pg_stat_user_indexes:
   Rule of thumb: under a week of uptime → treat R08 output as suggestive, not authoritative.
 - **`pg_stat_reset()` was called.** Same effect as a restart — stats nuked, count starts over.
 - **Read replicas absorbing reads** — see Ambiguous above.
-- **Indexes created by Prisma `@unique`** that haven't been queried via Prisma but ARE part of the uniqueness constraint. Postgres uses these for constraint enforcement (on insert/update) — that doesn't show up as `idx_scan`. The current rule excludes primary keys but not other unique indexes; this is a known limitation and worth tightening (planned).
+- **Indexes created by Prisma `@unique`** that haven't been queried via Prisma but ARE part of the uniqueness constraint. Postgres / MySQL use these for constraint enforcement (on insert/update) — that doesn't show up as `idx_scan` / `count_read`. As of 0.7.0 the rule **excludes unique non-PK indexes by default** in addition to primary keys. If you specifically want to audit them, set `R08.includeUnique = true`.
 
 ## Provider support
 
@@ -99,7 +102,7 @@ pg_stat_user_indexes:
 ## Implementation notes
 
 - **Capability flag.** The dispatcher returns a `DbSnapshot.capabilities.indexUsageTracking` boolean. R08 returns `[]` whenever it's `false`, so users always get an empty-but-valid run instead of inconsistent partial output.
-- **Unique-index exclusion gap.** As noted in Common false positives, the rule excludes `isPrimary` but not `isUnique` more broadly. That can produce false positives on Prisma `@unique` columns. Planned fix (B4 in roadmap): exclude unique indexes by default, expose `R08.includeUnique: true` for users who explicitly want them audited.
+- **Unique-index exclusion (since 0.7.0).** The rule excludes both `isPrimary` and `isUnique` indexes by default. The skip exists because Postgres / MySQL bump `idx_scan` only on read-path lookups, and a unique index used purely for constraint enforcement on inserts/updates therefore looks "unused" — producing steady noise on every Prisma `@unique` column. Re-enable via `R08.includeUnique = true` for one-off audits.
 - **Ignores tables under `minRowCount`** entirely (not just emits weaker findings).
 - **Doesn't suggest dropping** in the message, only flags. The skill is expected to add context based on table activity.
 

@@ -16,6 +16,12 @@ export type RuleId =
   | "R07"
   | "R08"
   | "R09"
+  /** Type drift between Prisma `@db.*` and live DB column type. */
+  | "R09b"
+  /** Foreign-key constraint drift (onDelete / onUpdate / shape). */
+  | "R09c"
+  /** Default-value drift between Prisma `@default(...)` and live DB DEFAULT. */
+  | "R09d"
   | "R10"
   | "R11";
 

@@ -7,7 +7,7 @@
 | Surface | CLI (`--db`) + skill |
 | Group | B (live DB) |
 | Auto-fix | no — drift always implies a migration decision |
-| Implementation | done (column-level for Postgres + MySQL + SQLite); type-level drift is R09b (planned) |
+| Implementation | done (column-level for Postgres + MySQL + SQLite). Type / FK / default drift are split into [R09b](R09b-type-drift.md) / [R09c](R09c-fk-constraints-drift.md) / [R09d](R09d-default-values-drift.md). |
 
 ## What it checks
 
@@ -20,7 +20,7 @@ Three classes of finding:
 3. **Column in DB but not in Prisma** — orphan column. Either an old field someone forgot to drop, or a field added by another system (a worker, an external service writing into the same DB).
 4. **Nullability mismatch** — Prisma says required (`String`), DB says nullable (or vice versa). Excluded for array fields — see Common false positives.
 
-Type drift (e.g. `@db.VarChar(100)` in Prisma vs `varchar(255)` in DB) is **not** covered yet — tracked as R09b.
+Type drift (e.g. `@db.VarChar(100)` in Prisma vs `varchar(255)` in DB) is covered by **[R09b](R09b-type-drift.md)**. FK constraint drift (`@relation(... onDelete: Cascade)` vs DB) is **[R09c](R09c-fk-constraints-drift.md)**. Default-value drift (`@default("draft")` vs DB DEFAULT) is **[R09d](R09d-default-values-drift.md)**.
 
 Resolves table names through `@@map(...)`; falls back to the model name as written (which is Prisma's actual default — Prisma does NOT auto-snake_case unless you tell it to). Field names go through `@map(...)`.
 
@@ -107,14 +107,17 @@ Likely a hand-written migration relaxed the column to nullable, but `schema.pris
 
 ## Implementation notes
 
-- **Column-level only.** Type drift (e.g. `varchar(100)` ↔ `varchar(255)`, `int4` ↔ `int8`, `text` ↔ `varchar`) is not currently checked. That class lives in R09b (planned). `Bytes` and similarly exotic types are also not type-checked even when R09b lands — best-effort, not exhaustive.
-- **Default values.** Not currently compared. A column that defaults to `''` in DB but is required-without-default in Prisma will pass without complaint.
-- **Indexes and constraints** are not part of R09 — those live in R07/R08 (indexes) and would be R09c (constraint drift) if we ever add it.
+- **Column-level only.** Type drift (e.g. `varchar(100)` ↔ `varchar(255)`, `int4` ↔ `int8`, `text` ↔ `varchar`) lives in [R09b](R09b-type-drift.md). `Bytes` and similarly exotic types are best-effort there, not exhaustive.
+- **Default values.** Compared by [R09d](R09d-default-values-drift.md). A column that defaults to `'pending'` in DB but `@default("draft")` in Prisma will surface there.
+- **Indexes and constraints** are not part of R09 — those live in R07/R08 (indexes) and [R09c](R09c-fk-constraints-drift.md) (FK constraint drift).
 - **Honors `@@map(...)` and `@map(...)`** for table and column names respectively.
 - **Strips quotes from string-literal attribute args.** Earlier versions had a bug where `@map("col")` came through as `"col"` (with quotes), causing 100% false positives on every `@map`-using field. Fixed; regression test in `tests/prisma-models.test.ts`.
 
 ## See also
 
+- [R09b](R09b-type-drift.md) — Type drift (column type / length)
+- [R09c](R09c-fk-constraints-drift.md) — Foreign-key constraints drift
+- [R09d](R09d-default-values-drift.md) — Default-value drift
 - R07 — Redundant indexes (live DB, different signal)
 - R08 — Unused indexes (live DB, different signal)
 - R04 — Nullability mismatch (static, Prisma ↔ Zod side; R09 does the Prisma ↔ DB side)

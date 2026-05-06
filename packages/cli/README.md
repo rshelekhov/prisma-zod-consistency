@@ -180,12 +180,29 @@ Loaded via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — searche
     "R08": {
       "severity": "info",
       "minRowCount": 1000,          // skip tables smaller than this
-      "ignoreIndexes": ["_pkey$"]   // regex patterns
+      "ignoreIndexes": ["_pkey$"],  // regex patterns
+      "includeUnique": false        // audit unique non-PK indexes too (false by default — Postgres/MySQL don't bump idx_scan on constraint enforcement)
     },
     "R09": {
       "severity": "warning",
       "ignoreTables": ["_prisma_migrations"],
       "ignoreColumns": ["^legacy_"]
+    },
+    "R09b": {                       // type drift: @db.VarChar(100) ↔ varchar(255), Int ↔ bigint, …
+      "severity": "warning",
+      "ignoreTables": ["_prisma_migrations"],
+      "ignoreColumns": ["^legacy_"]
+      // SQLite is skipped automatically via DbCapabilities.typeDriftAccurate=false.
+    },
+    "R09c": {                       // FK constraints drift: missing/extra/action
+      "severity": "warning",
+      "ignoreTables": ["_prisma_migrations"],
+      "ignoreRelations": ["^Audit\\."]  // regex matched against `Model.field`
+    },
+    "R09d": {                       // default-value drift: @default("draft") ↔ DB DEFAULT 'pending'
+      "severity": "warning",
+      "ignoreTables": ["_prisma_migrations"],
+      "ignoreColumns": ["^created_at$", "^updated_at$"]
     },
 
     // Disable a rule entirely:
@@ -214,22 +231,23 @@ Minimal GitHub Actions step:
 For Group B in CI you typically want a separate job that has DB access. Examples per provider:
 
 ```yaml
-# PostgreSQL
+# PostgreSQL — full Group B coverage
 - run: |
     DATABASE_URL=postgres://user:pass@host:5432/dbname \
-      prisma-zod-consistency --rules R07,R08,R09 --db --output json \
+      prisma-zod-consistency --rules R07,R08,R09,R09b,R09c,R09d --db --output json \
       > pzc-db-findings.json
 
-# MySQL / MariaDB
+# MySQL / MariaDB — full Group B coverage
 - run: |
     DATABASE_URL=mysql://user:pass@host:3306/dbname \
-      prisma-zod-consistency --rules R07,R08,R09 --db --output json \
+      prisma-zod-consistency --rules R07,R08,R09,R09b,R09c,R09d --db --output json \
       > pzc-db-findings.json
 
-# SQLite (R08 silently skipped — provider doesn't track index usage)
+# SQLite (R08 and R09b silently skipped — provider doesn't track index usage
+# or precise column types; R07/R09/R09c/R09d run normally)
 - run: |
     DATABASE_URL=file:./prisma/dev.db \
-      prisma-zod-consistency --rules R07,R09 --db --output json \
+      prisma-zod-consistency --rules R07,R09,R09c,R09d --db --output json \
       > pzc-db-findings.json
 ```
 
@@ -246,7 +264,7 @@ For Group B in CI you typically want a separate job that has DB access. Examples
     sarif_file: pzc.sarif
 ```
 
-Findings appear in the **Security** tab of the repo and as inline annotations on PRs. Severity maps as `error`→`error`, `warning`→`warning`, `info`→`note`. Each rule's `helpUri` points at its spec on GitHub. Live-DB findings (R07/R08/R09) emit a generic repository annotation (no file/line) since they're not anchored to source.
+Findings appear in the **Security** tab of the repo and as inline annotations on PRs. Severity maps as `error`→`error`, `warning`→`warning`, `info`→`note`. Each rule's `helpUri` points at its spec on GitHub. Live-DB findings (R07/R08/R09/R09b/R09c/R09d) emit a generic repository annotation (no file/line) since they're not anchored to source.
 
 ## Suppression comments
 
@@ -277,7 +295,7 @@ webhookHandler.post("/square", async (c) => {
 status: z.string(),
 ```
 
-Scope: only TS/TSX files (R01, R03, R04, R05). Findings in `schema.prisma` (R02) and live-DB findings (R07/R08/R09) are not affected by these comments — Prisma's comment syntax differs and is not yet supported.
+Scope: only TS/TSX files (R01, R03, R04, R05). Findings in `schema.prisma` (R02) and live-DB findings (R07/R08/R09/R09b/R09c/R09d) are not affected by these comments — Prisma's comment syntax differs and is not yet supported.
 
 To hard-gate a rule for compliance — ignore suppression comments entirely and always report — set `suppressionsEnabled: false` per rule in your config (see below).
 
@@ -294,6 +312,9 @@ To hard-gate a rule for compliance — ignore suppression comments entirely and 
 | R07 | Redundant indexes (DB) | info | CLI `--db` (Postgres + MySQL + SQLite) + skill | — |
 | R08 | Unused indexes (DB) | info | CLI `--db` (Postgres + MySQL; skipped on SQLite) + skill | — |
 | R09 | Schema drift vs live DB | warning | CLI `--db` (Postgres + MySQL + SQLite) + skill | — |
+| R09b | Type drift vs live DB | warning | CLI `--db` (Postgres + MySQL; skipped on SQLite) + skill | — |
+| R09c | FK constraints drift vs live DB | warning | CLI `--db` (Postgres + MySQL + SQLite) + skill | — |
+| R09d | Default-value drift vs live DB | warning | CLI `--db` (Postgres + MySQL + SQLite) + skill | — |
 | R10 | N+1 queries | info | skill only | — |
 | R11 | `select: { id: true }` for existence checks | info | skill only | — |
 

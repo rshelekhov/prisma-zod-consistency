@@ -8,6 +8,10 @@
  * Excludes:
  *   - Primary keys (always present, often look "unused" if the table is
  *     write-only).
+ *   - Unique non-PK indexes (Postgres / MySQL use them for constraint
+ *     enforcement on insert/update, which doesn't increment idx_scan; flagging
+ *     them produces false positives on Prisma `@unique` columns). Opt back in
+ *     via `R08.includeUnique = true`.
  *   - Tiny tables (under `minRowCount`, default 1000) — Postgres
  *     legitimately picks a seq_scan over a small index.
  *
@@ -21,6 +25,16 @@ interface R08Config {
   minRowCount?: number;
   /** Skip indexes whose name matches one of these (e.g. ["_pkey$"]). */
   ignoreIndexes?: string[];
+  /**
+   * Whether to flag unique non-PK indexes that look unused.
+   *
+   * Off by default because Postgres / MySQL use unique indexes for constraint
+   * enforcement on the insert/update path, which doesn't increment `idx_scan`.
+   * That makes legitimate unique indexes appear unused and produces a steady
+   * stream of false positives on Prisma `@unique` columns. Turn this on if
+   * you specifically want to audit unique indexes and accept the trade-off.
+   */
+  includeUnique?: boolean;
 }
 
 export const r08: Rule = {
@@ -51,6 +65,7 @@ export function findUnused(
   const config = options.config as R08Config;
   const minRowCount = config.minRowCount ?? 1000;
   const ignoreIndexes = (config.ignoreIndexes ?? []).map((p) => new RegExp(p));
+  const includeUnique = config.includeUnique ?? false;
 
   const indexByName = new Map(indexes.map((i) => [`${i.schemaName}.${i.indexName}`, i]));
   const findings: Finding[] = [];
@@ -63,6 +78,10 @@ export function findUnused(
 
     const idx = indexByName.get(`${u.schemaName}.${u.indexName}`);
     if (idx?.isPrimary) continue;
+    // Unique non-PK indexes look unused under Postgres/MySQL stat semantics
+    // because constraint-enforcement reads (insert/update) don't bump
+    // idx_scan / count_read. Skip by default; opt back in via `includeUnique`.
+    if (idx?.isUnique && !includeUnique) continue;
 
     findings.push({
       ruleId: "R08",

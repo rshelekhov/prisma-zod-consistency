@@ -12,6 +12,9 @@ import { r05 } from "./r05-validated-bypass.js";
 import { r07 } from "./r07-redundant-indexes.js";
 import { r08 } from "./r08-unused-indexes.js";
 import { r09 } from "./r09-schema-drift-vs-db.js";
+import { r09b } from "./r09b-type-drift.js";
+import { r09c } from "./r09c-fk-constraints-drift.js";
+import { r09d } from "./r09d-default-values-drift.js";
 
 const REGISTRY: Map<RuleId, Rule> = new Map([
   [r01.id, r01],
@@ -22,10 +25,13 @@ const REGISTRY: Map<RuleId, Rule> = new Map([
   [r07.id, r07],
   [r08.id, r08],
   [r09.id, r09],
+  [r09b.id, r09b],
+  [r09c.id, r09c],
+  [r09d.id, r09d],
 ]);
 
 /** Rules that require a live DB snapshot in the project context. */
-export const DB_RULES: ReadonlySet<RuleId> = new Set(["R07", "R08", "R09"]);
+export const DB_RULES: ReadonlySet<RuleId> = new Set(["R07", "R08", "R09", "R09b", "R09c", "R09d"]);
 
 export function getRule(id: RuleId): Rule | undefined {
   return REGISTRY.get(id);

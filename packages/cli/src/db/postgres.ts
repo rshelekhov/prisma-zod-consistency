@@ -10,7 +10,15 @@
 // `import type` is a pure type reference — tsc strips it from emit, so it does NOT
 // pull `postgres` at runtime even when the dependency is missing.
 import type postgres from "postgres";
-import type { DbColumn, DbConnectOptions, DbIndex, DbIndexUsage, DbSnapshot } from "./types.js";
+import type {
+  DbColumn,
+  DbConnectOptions,
+  DbForeignKey,
+  DbIndex,
+  DbIndexUsage,
+  DbSnapshot,
+  ForeignKeyAction,
+} from "./types.js";
 
 const DEFAULT_EXCLUDE_TABLES = ["_prisma_migrations"];
 
@@ -31,16 +39,18 @@ export async function snapshotPostgres(opts: DbConnectOptions): Promise<DbSnapsh
   const excludeTables = new Set([...DEFAULT_EXCLUDE_TABLES, ...(opts.excludeTables ?? [])]);
 
   try {
-    const [indexes, indexUsage, columns] = await Promise.all([
+    const [indexes, indexUsage, columns, foreignKeys] = await Promise.all([
       fetchIndexes(sql, schema, excludeTables),
       fetchIndexUsage(sql, schema, excludeTables),
       fetchColumns(sql, schema, excludeTables),
+      fetchForeignKeys(sql, schema, excludeTables),
     ]);
     return {
       indexes,
       indexUsage,
       columns,
-      capabilities: { indexUsageTracking: true },
+      foreignKeys,
+      capabilities: { indexUsageTracking: true, typeDriftAccurate: true },
     };
   } finally {
     await sql.end({ timeout: 5 });
@@ -149,6 +159,7 @@ async function fetchColumns(sql: Sql, schema: string, exclude: Set<string>): Pro
       udt_name: string;
       is_nullable: string;
       character_maximum_length: number | null;
+      column_default: string | null;
     }>
   >`
     SELECT
@@ -158,7 +169,8 @@ async function fetchColumns(sql: Sql, schema: string, exclude: Set<string>): Pro
       data_type,
       udt_name,
       is_nullable,
-      character_maximum_length
+      character_maximum_length,
+      column_default
     FROM information_schema.columns
     WHERE table_schema = ${schema}
     ORDER BY table_name, ordinal_position
@@ -173,5 +185,108 @@ async function fetchColumns(sql: Sql, schema: string, exclude: Set<string>): Pro
       udtName: r.udt_name,
       isNullable: r.is_nullable === "YES",
       characterMaximumLength: r.character_maximum_length,
+      columnDefault: r.column_default,
     }));
+}
+
+interface PgForeignKeyRow {
+  schema_name: string;
+  table_name: string;
+  constraint_name: string;
+  /** Postgres action codes. See `pg_constraint.confdeltype` / `confupdtype`. */
+  on_delete_code: string;
+  on_update_code: string;
+  /** Source columns in the order they were declared in the constraint. */
+  columns: string[];
+  referenced_table: string;
+  /** Referenced columns parallel to `columns`. */
+  referenced_columns: string[];
+}
+
+async function fetchForeignKeys(
+  sql: Sql,
+  schema: string,
+  exclude: Set<string>,
+): Promise<DbForeignKey[]> {
+  // pg_constraint.contype = 'f' is FK. We pull the source/target column names
+  // by joining pg_attribute through pg_constraint.conkey (source attnums) and
+  // confkey (target attnums). Both arrays preserve declaration order, which we
+  // preserve by reconstructing per-position via array_position.
+  const rows = await sql<PgForeignKeyRow[]>`
+    SELECT
+      n.nspname                                                AS schema_name,
+      cls.relname                                              AS table_name,
+      con.conname                                              AS constraint_name,
+      con.confdeltype                                          AS on_delete_code,
+      con.confupdtype                                          AS on_update_code,
+      ARRAY(
+        SELECT a.attname
+        FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+        JOIN pg_attribute a
+          ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+        ORDER BY k.ord
+      )                                                        AS columns,
+      fcls.relname                                             AS referenced_table,
+      ARRAY(
+        SELECT a.attname
+        FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+        JOIN pg_attribute a
+          ON a.attrelid = con.confrelid AND a.attnum = k.attnum
+        ORDER BY k.ord
+      )                                                        AS referenced_columns
+    FROM pg_constraint con
+    JOIN pg_class cls       ON cls.oid = con.conrelid
+    JOIN pg_namespace n     ON n.oid = cls.relnamespace
+    JOIN pg_class fcls      ON fcls.oid = con.confrelid
+    WHERE con.contype = 'f'
+      AND n.nspname = ${schema}
+    ORDER BY cls.relname, con.conname
+  `;
+
+  return mapPostgresForeignKeyRows(rows, exclude);
+}
+
+/**
+ * Pure mapping — exposed for unit tests. Translates Postgres action codes
+ * (`pg_constraint.confdeltype` / `confupdtype`) into the normalized vocabulary
+ * defined by `ForeignKeyAction`.
+ *
+ * Postgres codes:
+ *   `a` → no action (default)   `r` → restrict   `c` → cascade
+ *   `n` → set null              `d` → set default
+ */
+export function mapPostgresForeignKeyRows(
+  rows: PgForeignKeyRow[],
+  exclude: Set<string>,
+): DbForeignKey[] {
+  return rows
+    .filter((r) => !exclude.has(r.table_name))
+    .map((r) => ({
+      schemaName: r.schema_name,
+      tableName: r.table_name,
+      constraintName: r.constraint_name,
+      columns: r.columns,
+      referencedTable: r.referenced_table,
+      referencedColumns: r.referenced_columns,
+      onDelete: pgActionFromCode(r.on_delete_code),
+      onUpdate: pgActionFromCode(r.on_update_code),
+    }));
+}
+
+function pgActionFromCode(code: string): ForeignKeyAction {
+  switch (code) {
+    case "c":
+      return "cascade";
+    case "r":
+      return "restrict";
+    case "n":
+      return "set null";
+    case "d":
+      return "set default";
+    default:
+      // 'a' or anything unknown — Postgres documents 'a' as NO ACTION (the
+      // default), and we conservatively bucket unknown codes there too. Better
+      // to under-report drift than synthesize a wrong action.
+      return "no action";
+  }
 }

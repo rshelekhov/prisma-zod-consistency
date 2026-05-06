@@ -81,7 +81,7 @@ The defaults work for most projects. You add a config when you need to:
 - Point at a non-standard `schema.prisma` location
 - Narrow the include/exclude globs
 - Tune severity per rule, ignore specific models or relations
-- Configure live-DB rules (R07/R08/R09)
+- Configure live-DB rules (R07/R08/R09/R09b/R09c/R09d)
 
 Pick one of these locations (cosmiconfig searches up from cwd):
 
@@ -153,36 +153,44 @@ What is **not** auto-fixed:
 - `schema.prisma` is never touched (schema changes imply migrations)
 - R02 / R04 / R05 — the right action is contextual, no safe mechanical rewrite
 
-## 6. Live-DB mode (R07/R08/R09)
+## 6. Live-DB mode (R07/R08/R09/R09b/R09c/R09d)
 
 The static rules don't need a database. The Group B rules do — they snapshot the live DB and compare it against `schema.prisma`:
 
 - **R07** — redundant indexes
-- **R08** — unused indexes (per-index read counters)
-- **R09** — schema drift (column-level)
+- **R08** — unused indexes (per-index read counters); excludes unique non-PK indexes by default — opt back in with `R08.includeUnique = true`
+- **R09** — schema drift (column existence + nullability)
+- **R09b** — type drift (`@db.VarChar(100)` ↔ `varchar(255)`, `Int` ↔ `bigint`, …)
+- **R09c** — FK constraints drift (`@relation(... onDelete: Cascade)` vs DB)
+- **R09d** — default-value drift (`@default("draft")` vs DB DEFAULT)
 
 Supported providers: **PostgreSQL**, **MySQL/MariaDB**, **SQLite**. The driver for each is an optional peer dependency — install only the one your project uses:
 
 ```bash
-# PostgreSQL
+# PostgreSQL — full Group B coverage
 pnpm add -D postgres
 DATABASE_URL=postgres://user:pass@host:5432/dbname \
-  prisma-zod-consistency --db --rules R07,R08,R09
+  prisma-zod-consistency --db --rules R07,R08,R09,R09b,R09c,R09d
 
-# MySQL / MariaDB
+# MySQL / MariaDB — full Group B coverage
 pnpm add -D mysql2
 DATABASE_URL=mysql://user:pass@host:3306/dbname \
-  prisma-zod-consistency --db --rules R07,R08,R09
+  prisma-zod-consistency --db --rules R07,R08,R09,R09b,R09c,R09d
 
-# SQLite (R08 silently skipped — provider doesn't track index usage)
+# SQLite (R08 + R09b silently skipped — affinity-based typing, no usage stats;
+# R07/R09/R09c/R09d run normally)
 pnpm add -D better-sqlite3
 DATABASE_URL=file:./prisma/dev.db \
-  prisma-zod-consistency --db --rules R07,R09
+  prisma-zod-consistency --db --rules R07,R09,R09c,R09d
 ```
 
 Without `--db`, Group B rules silently skip — same binary works in CI jobs that have DB access and ones that don't.
 
-R08 needs per-index read counters. On Postgres they come from `pg_stat_user_indexes` (always on). On MySQL they come from `performance_schema.table_io_waits_summary_by_index_usage` (default-on in 5.7+); if `performance_schema` is disabled, R08 silently skips with a stderr warning. SQLite never tracks index usage, so R08 always skips on SQLite — the runner emits one warning when R08 is explicitly requested. R07 (redundant) and R09 (drift) work uniformly on all three providers.
+R08 needs per-index read counters. On Postgres they come from `pg_stat_user_indexes` (always on). On MySQL they come from `performance_schema.table_io_waits_summary_by_index_usage` (default-on in 5.7+); if `performance_schema` is disabled, R08 silently skips with a stderr warning. SQLite never tracks index usage, so R08 always skips on SQLite — the runner emits one warning when R08 is explicitly requested.
+
+R09b (type drift) needs precise column-type metadata. Postgres reports `udt_name` + `character_maximum_length`; MySQL reports `DATA_TYPE` + `character_maximum_length`. SQLite stores type affinities — declared lengths aren't enforced and `varchar(100)` vs `varchar(255)` is indistinguishable — so R09b silently skips on SQLite, with a one-shot stderr warning when explicitly requested.
+
+R07 (redundant), R09 (column-existence + nullability), R09c (FK constraints drift), and R09d (default-value drift) work uniformly on all three providers.
 
 ## 7. Wire it into CI
 
@@ -204,7 +212,7 @@ For Group B you typically want a separate job that has DB access:
 ```yaml
 - run: |
     DATABASE_URL=${{ secrets.DATABASE_URL }} \
-      prisma-zod-consistency --rules R07,R08,R09 --db --output json \
+      prisma-zod-consistency --rules R07,R08,R09,R09b,R09c,R09d --db --output json \
       > pzc-db-findings.json
 ```
 

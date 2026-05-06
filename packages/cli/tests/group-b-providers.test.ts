@@ -22,8 +22,14 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isDbProviderSupported } from "../src/db/index.js";
-import { groupIndexRows, mapColumnRows, mapUsageRows } from "../src/db/mysql.js";
-import { snapshotSqlite } from "../src/db/sqlite.js";
+import {
+  groupIndexRows,
+  groupMysqlForeignKeyRows,
+  mapColumnRows,
+  mapUsageRows,
+} from "../src/db/mysql.js";
+import { mapPostgresForeignKeyRows } from "../src/db/postgres.js";
+import { groupSqliteForeignKeyRows, snapshotSqlite } from "../src/db/sqlite.js";
 import type { DbIndex, DbIndexUsage, DbSnapshot } from "../src/db/types.js";
 import { r08 } from "../src/rules/r08-unused-indexes.js";
 import type { ProjectContext } from "../src/types.js";
@@ -120,9 +126,64 @@ describe.skipIf(!sqliteAvailable)("SQLite adapter — end-to-end against a real 
     expect(userCols.find((c) => c.columnName === "email")?.isNullable).toBe(false);
     expect(userCols.find((c) => c.columnName === "created")?.isNullable).toBe(true);
 
-    // Capability assertion: SQLite never tracks usage.
+    // Capability assertion: SQLite never tracks usage and is not type-precise.
     expect(snap.indexUsage).toEqual([]);
     expect(snap.capabilities.indexUsageTracking).toBe(false);
+    expect(snap.capabilities.typeDriftAccurate).toBe(false);
+    expect(snap.foreignKeys).toEqual([]); // no FK constraints in this fixture
+  });
+
+  it("captures column defaults from PRAGMA table_info", async () => {
+    const writer = new Database(tmpFile);
+    writer.exec(`
+      CREATE TABLE posts (
+        id      INTEGER PRIMARY KEY,
+        title   TEXT NOT NULL,
+        status  TEXT NOT NULL DEFAULT 'draft',
+        views   INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    writer.close();
+
+    const snap: DbSnapshot = await snapshotSqlite({ url: `file:${tmpFile}` });
+    const status = snap.columns.find((c) => c.tableName === "posts" && c.columnName === "status");
+    const views = snap.columns.find((c) => c.tableName === "posts" && c.columnName === "views");
+    const title = snap.columns.find((c) => c.tableName === "posts" && c.columnName === "title");
+    // SQLite preserves the literal expression as written in CREATE TABLE,
+    // including the surrounding quotes for string defaults.
+    expect(status?.columnDefault).toBe("'draft'");
+    expect(views?.columnDefault).toBe("0");
+    expect(title?.columnDefault).toBe(null);
+  });
+
+  it("captures multi-column foreign keys via PRAGMA foreign_key_list", async () => {
+    const writer = new Database(tmpFile);
+    writer.exec(`
+      CREATE TABLE org (
+        id1 INTEGER NOT NULL,
+        id2 INTEGER NOT NULL,
+        PRIMARY KEY (id1, id2)
+      );
+      CREATE TABLE membership (
+        id        INTEGER PRIMARY KEY,
+        org_id1   INTEGER NOT NULL,
+        org_id2   INTEGER NOT NULL,
+        FOREIGN KEY (org_id1, org_id2) REFERENCES org(id1, id2)
+          ON DELETE CASCADE ON UPDATE RESTRICT
+      );
+    `);
+    writer.close();
+
+    const snap: DbSnapshot = await snapshotSqlite({ url: `file:${tmpFile}` });
+    const fks = snap.foreignKeys.filter((f) => f.tableName === "membership");
+    expect(fks).toHaveLength(1);
+    expect(fks[0]?.referencedTable).toBe("org");
+    // PRAGMA foreign_key_list emits one row per source column. We expect them
+    // grouped into a single FK with parallel column arrays in declaration order.
+    expect(fks[0]?.columns).toEqual(["org_id1", "org_id2"]);
+    expect(fks[0]?.referencedColumns).toEqual(["id1", "id2"]);
+    expect(fks[0]?.onDelete).toBe("cascade");
+    expect(fks[0]?.onUpdate).toBe("restrict");
   });
 
   it("excludes _prisma_migrations by default", async () => {
@@ -262,7 +323,7 @@ describe("MySQL adapter — mapping functions", () => {
     expect(hot?.tableSeqScan).toBe(1); // sentinel: table is alive
   });
 
-  it("mapColumnRows maps IS_NULLABLE='YES'/'NO' and pulls character_maximum_length through", () => {
+  it("mapColumnRows maps IS_NULLABLE='YES'/'NO' and pulls character_maximum_length / column_default through", () => {
     const rows = [
       {
         schema_name: "app",
@@ -271,6 +332,7 @@ describe("MySQL adapter — mapping functions", () => {
         data_type: "varchar",
         is_nullable: "NO" as const,
         character_maximum_length: 255,
+        column_default: null,
       },
       {
         schema_name: "app",
@@ -279,6 +341,16 @@ describe("MySQL adapter — mapping functions", () => {
         data_type: "text",
         is_nullable: "YES" as const,
         character_maximum_length: null,
+        column_default: null,
+      },
+      {
+        schema_name: "app",
+        table_name: "users",
+        column_name: "status",
+        data_type: "varchar",
+        is_nullable: "NO" as const,
+        character_maximum_length: 20,
+        column_default: "'draft'",
       },
     ];
     const result = mapColumnRows(rows, new Set());
@@ -287,10 +359,208 @@ describe("MySQL adapter — mapping functions", () => {
     expect(email?.characterMaximumLength).toBe(255);
     expect(email?.dataType).toBe("varchar");
     expect(email?.udtName).toBe("varchar");
+    expect(email?.columnDefault).toBe(null);
 
     const bio = result.find((c) => c.columnName === "bio");
     expect(bio?.isNullable).toBe(true);
     expect(bio?.characterMaximumLength).toBe(null);
+
+    const status = result.find((c) => c.columnName === "status");
+    expect(status?.columnDefault).toBe("'draft'");
+  });
+});
+
+describe("Postgres adapter — FK action code translation", () => {
+  // Postgres reports FK actions as single-character codes
+  // (`pg_constraint.confdeltype` / `confupdtype`). We normalize them to the
+  // SQL-standard vocabulary so R09c can compare against Prisma `@relation` text.
+  it("maps single-character codes to the normalized vocabulary", () => {
+    const rows = [
+      {
+        schema_name: "public",
+        table_name: "membership",
+        constraint_name: "membership_org_id_fkey",
+        on_delete_code: "c",
+        on_update_code: "r",
+        columns: ["org_id"],
+        referenced_table: "org",
+        referenced_columns: ["id"],
+      },
+      {
+        schema_name: "public",
+        table_name: "comment",
+        constraint_name: "comment_post_id_fkey",
+        on_delete_code: "n",
+        on_update_code: "a",
+        columns: ["post_id"],
+        referenced_table: "post",
+        referenced_columns: ["id"],
+      },
+      {
+        schema_name: "public",
+        table_name: "audit",
+        constraint_name: "audit_actor_id_fkey",
+        on_delete_code: "d",
+        on_update_code: "x", // unknown — should bucket into "no action"
+        columns: ["actor_id"],
+        referenced_table: "user",
+        referenced_columns: ["id"],
+      },
+    ];
+    const result = mapPostgresForeignKeyRows(rows, new Set());
+    expect(result.find((r) => r.constraintName === "membership_org_id_fkey")?.onDelete).toBe(
+      "cascade",
+    );
+    expect(result.find((r) => r.constraintName === "membership_org_id_fkey")?.onUpdate).toBe(
+      "restrict",
+    );
+    const comment = result.find((r) => r.constraintName === "comment_post_id_fkey");
+    expect(comment?.onDelete).toBe("set null");
+    expect(comment?.onUpdate).toBe("no action");
+    const audit = result.find((r) => r.constraintName === "audit_actor_id_fkey");
+    expect(audit?.onDelete).toBe("set default");
+    expect(audit?.onUpdate).toBe("no action"); // unknown → conservative fallback
+  });
+
+  it("respects excludeTables", () => {
+    const rows = [
+      {
+        schema_name: "public",
+        table_name: "_prisma_migrations",
+        constraint_name: "ignored_fkey",
+        on_delete_code: "c",
+        on_update_code: "c",
+        columns: ["x"],
+        referenced_table: "y",
+        referenced_columns: ["id"],
+      },
+    ];
+    const result = mapPostgresForeignKeyRows(rows, new Set(["_prisma_migrations"]));
+    expect(result).toEqual([]);
+  });
+});
+
+describe("MySQL adapter — FK row grouping", () => {
+  // KEY_COLUMN_USAGE returns one row per source column; multi-column FKs share
+  // a constraint_name and ascend by ordinal_position. The mapping function has
+  // to rebuild parallel `columns` / `referencedColumns` arrays in order.
+  it("groups multi-column FK rows in ordinal_position order", () => {
+    const rows = [
+      {
+        schema_name: "app",
+        table_name: "membership",
+        constraint_name: "membership_org_fk",
+        column_name: "org_id1",
+        ordinal_position: 1,
+        referenced_table: "org",
+        referenced_column: "id1",
+        delete_rule: "CASCADE",
+        update_rule: "NO ACTION",
+      },
+      {
+        schema_name: "app",
+        table_name: "membership",
+        constraint_name: "membership_org_fk",
+        column_name: "org_id2",
+        ordinal_position: 2,
+        referenced_table: "org",
+        referenced_column: "id2",
+        delete_rule: "CASCADE",
+        update_rule: "NO ACTION",
+      },
+    ];
+    const result = groupMysqlForeignKeyRows(rows, new Set());
+    expect(result).toHaveLength(1);
+    expect(result[0]?.columns).toEqual(["org_id1", "org_id2"]);
+    expect(result[0]?.referencedColumns).toEqual(["id1", "id2"]);
+    expect(result[0]?.onDelete).toBe("cascade");
+    expect(result[0]?.onUpdate).toBe("no action");
+  });
+
+  it("translates DELETE_RULE / UPDATE_RULE text into the normalized vocabulary", () => {
+    const make = (deleteRule: string, updateRule: string) => ({
+      schema_name: "app",
+      table_name: "t",
+      constraint_name: `c_${deleteRule}_${updateRule}`,
+      column_name: "x",
+      ordinal_position: 1,
+      referenced_table: "y",
+      referenced_column: "id",
+      delete_rule: deleteRule,
+      update_rule: updateRule,
+    });
+    const result = groupMysqlForeignKeyRows(
+      [
+        make("RESTRICT", "SET NULL"),
+        make("SET DEFAULT", "CASCADE"),
+        make("NO ACTION", "WHATEVER"), // unknown → "no action"
+      ],
+      new Set(),
+    );
+    expect(result.find((r) => r.constraintName === "c_RESTRICT_SET NULL")?.onDelete).toBe(
+      "restrict",
+    );
+    expect(result.find((r) => r.constraintName === "c_RESTRICT_SET NULL")?.onUpdate).toBe(
+      "set null",
+    );
+    expect(result.find((r) => r.constraintName === "c_SET DEFAULT_CASCADE")?.onDelete).toBe(
+      "set default",
+    );
+    expect(result.find((r) => r.constraintName === "c_NO ACTION_WHATEVER")?.onUpdate).toBe(
+      "no action",
+    );
+  });
+});
+
+describe("SQLite adapter — FK row grouping", () => {
+  // PRAGMA foreign_key_list returns one row per source column. Each FK has its
+  // own `id`; multi-column FKs share id with seq=0..N-1.
+  it("groups multi-column FK rows by id, preserving seq order", () => {
+    const rows = [
+      // Intentionally out-of-order to exercise the sort.
+      {
+        id: 0,
+        seq: 1,
+        table: "org",
+        from: "org_id2",
+        to: "id2",
+        on_update: "RESTRICT",
+        on_delete: "CASCADE",
+        match: "NONE",
+      },
+      {
+        id: 0,
+        seq: 0,
+        table: "org",
+        from: "org_id1",
+        to: "id1",
+        on_update: "RESTRICT",
+        on_delete: "CASCADE",
+        match: "NONE",
+      },
+      {
+        id: 1,
+        seq: 0,
+        table: "user",
+        from: "actor_id",
+        to: "id",
+        on_update: "NO ACTION",
+        on_delete: "SET NULL",
+        match: "NONE",
+      },
+    ];
+    const result = groupSqliteForeignKeyRows(rows, "membership");
+    expect(result).toHaveLength(2);
+    const composite = result.find((f) => f.referencedTable === "org");
+    expect(composite?.columns).toEqual(["org_id1", "org_id2"]);
+    expect(composite?.referencedColumns).toEqual(["id1", "id2"]);
+    expect(composite?.onDelete).toBe("cascade");
+    expect(composite?.onUpdate).toBe("restrict");
+    expect(composite?.constraintName).toBe("membership_fk_0");
+
+    const single = result.find((f) => f.referencedTable === "user");
+    expect(single?.onDelete).toBe("set null");
+    expect(single?.onUpdate).toBe("no action");
   });
 });
 
@@ -310,7 +580,8 @@ describe("R08 — capability-aware skip", () => {
       ],
       indexUsage: [],
       columns: [],
-      capabilities: { indexUsageTracking: false }, // SQLite-style
+      foreignKeys: [],
+      capabilities: { indexUsageTracking: false, typeDriftAccurate: false }, // SQLite-style
     });
     const findings = await r08.run(ctx, { severity: "info", config: {} });
     expect(findings).toEqual([]);
@@ -342,7 +613,8 @@ describe("R08 — capability-aware skip", () => {
       indexes,
       indexUsage,
       columns: [],
-      capabilities: { indexUsageTracking: true },
+      foreignKeys: [],
+      capabilities: { indexUsageTracking: true, typeDriftAccurate: true },
     });
     const findings = await r08.run(ctx, { severity: "info", config: {} });
     expect(findings).toHaveLength(1);

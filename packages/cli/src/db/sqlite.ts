@@ -31,7 +31,14 @@
  */
 
 import type SqliteDatabase from "better-sqlite3";
-import type { DbColumn, DbConnectOptions, DbIndex, DbSnapshot } from "./types.js";
+import type {
+  DbColumn,
+  DbConnectOptions,
+  DbForeignKey,
+  DbIndex,
+  DbSnapshot,
+  ForeignKeyAction,
+} from "./types.js";
 
 const DEFAULT_EXCLUDE_TABLES = ["_prisma_migrations"];
 
@@ -61,6 +68,25 @@ interface TableInfoRow {
   pk: number;
 }
 
+/**
+ * One row from `PRAGMA foreign_key_list(<table>)`. Multi-column FKs land as
+ * multiple rows with the same `id` and ascending `seq` (column position).
+ */
+interface ForeignKeyListRow {
+  id: number;
+  seq: number;
+  /** Referenced table name. */
+  table: string;
+  /** Source column on the table being introspected. */
+  from: string;
+  /** Referenced column. */
+  to: string;
+  on_update: string;
+  on_delete: string;
+  /** Match clause — we don't act on it, but PRAGMA returns it. */
+  match: string;
+}
+
 export async function snapshotSqlite(opts: DbConnectOptions): Promise<DbSnapshot> {
   const Database = await loadDriver();
   const filename = parseSqliteUrl(opts.url);
@@ -85,11 +111,16 @@ export async function snapshotSqlite(opts: DbConnectOptions): Promise<DbSnapshot
   try {
     const indexes = fetchIndexes(db, excludeTables);
     const columns = fetchColumns(db, excludeTables);
+    const foreignKeys = fetchForeignKeys(db, excludeTables);
     return {
       indexes,
       indexUsage: [], // SQLite does not track per-index usage; see file header.
       columns,
-      capabilities: { indexUsageTracking: false },
+      foreignKeys,
+      // SQLite type affinities make precise type comparison impossible —
+      // declared `VARCHAR(100)` is not enforced and indistinguishable from
+      // `varchar(255)` at the metadata level. R09b skips when this is false.
+      capabilities: { indexUsageTracking: false, typeDriftAccurate: false },
     };
   } finally {
     db.close();
@@ -188,19 +219,99 @@ function fetchColumns(db: SqliteDb, exclude: Set<string>): DbColumn[] {
         tableName,
         columnName: r.name,
         // SQLite has no formal "data_type" / "udt_name" split. We surface the
-        // declared type for both fields so R09 / R09b (when it lands) can read
-        // either consistently. Empty type is allowed in SQLite (BLOB affinity)
+        // declared type for both fields so R09 / R09b can read either
+        // consistently. Empty type is allowed in SQLite (BLOB affinity)
         // — leave as empty string rather than null.
         dataType: declared,
         udtName: declared,
         isNullable: r.notnull === 0,
         // Lengths are not enforced; nothing meaningful to surface.
         characterMaximumLength: null,
+        // PRAGMA's `dflt_value` is the raw expression as written in
+        // `CREATE TABLE` (already includes quotes for string literals). R09d
+        // normalizes both sides before comparing.
+        columnDefault: r.dflt_value,
       });
     }
   }
 
   return out;
+}
+
+function fetchForeignKeys(db: SqliteDb, exclude: Set<string>): DbForeignKey[] {
+  // SQLite has no INFORMATION_SCHEMA equivalent for FKs; the canonical source
+  // is `PRAGMA foreign_key_list(<table>)`, which we run per user table.
+  const tables = db
+    .prepare<[], { name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '${SQLITE_INTERNAL_PREFIX}%'`,
+    )
+    .all()
+    .filter((t) => !exclude.has(t.name));
+
+  const out: DbForeignKey[] = [];
+  for (const { name: tableName } of tables) {
+    const rows = db
+      .prepare<[], ForeignKeyListRow>(`PRAGMA foreign_key_list(${quoteIdent(tableName)})`)
+      .all();
+    out.push(...groupSqliteForeignKeyRows(rows, tableName));
+  }
+  return out;
+}
+
+/**
+ * Pure mapping — exposed for tests. Groups multi-column FK rows
+ * (`PRAGMA foreign_key_list` returns one row per source column with the same
+ * `id`) into single `DbForeignKey` entries.
+ *
+ * SQLite returns lowercased action text already (e.g. `"NO ACTION"`,
+ * `"CASCADE"`); we still uppercase-normalize before mapping for robustness.
+ *
+ * Constraint names are not surfaced by SQLite — we synthesize a stable
+ * synthetic name as `<table>_fk_<id>` so consumers get something to refer to.
+ */
+export function groupSqliteForeignKeyRows(
+  rows: ForeignKeyListRow[],
+  tableName: string,
+): DbForeignKey[] {
+  const byId = new Map<number, DbForeignKey>();
+  // Sort by id then seq so we deterministically rebuild the column order even
+  // if the PRAGMA returned rows out of order on some SQLite version.
+  const ordered = [...rows].sort((a, b) => a.id - b.id || a.seq - b.seq);
+  for (const r of ordered) {
+    let entry = byId.get(r.id);
+    if (!entry) {
+      entry = {
+        schemaName: "main",
+        tableName,
+        constraintName: `${tableName}_fk_${r.id}`,
+        columns: [],
+        referencedTable: r.table,
+        referencedColumns: [],
+        onDelete: sqliteActionFromText(r.on_delete),
+        onUpdate: sqliteActionFromText(r.on_update),
+      };
+      byId.set(r.id, entry);
+    }
+    entry.columns.push(r.from);
+    entry.referencedColumns.push(r.to);
+  }
+  return [...byId.values()];
+}
+
+function sqliteActionFromText(text: string): ForeignKeyAction {
+  switch (text.toUpperCase().trim()) {
+    case "CASCADE":
+      return "cascade";
+    case "RESTRICT":
+      return "restrict";
+    case "SET NULL":
+      return "set null";
+    case "SET DEFAULT":
+      return "set default";
+    default:
+      // "NO ACTION" / "" / unknown.
+      return "no action";
+  }
 }
 
 /**
