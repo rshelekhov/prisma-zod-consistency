@@ -141,6 +141,258 @@ describe("defaultsEqual — comparison verdict", () => {
   });
 });
 
+describe("Bug #9.A — Postgres cast strip with quoted/qualified type names", () => {
+  it("strips a quoted user-defined enum cast", () => {
+    expect(normalizeDbDefault("'user'::\"WebhookSource\"")).toEqual({
+      kind: "string",
+      value: "user",
+    });
+    expect(normalizeDbDefault("'pending'::\"SurveyStatus\"")).toEqual({
+      kind: "string",
+      value: "pending",
+    });
+  });
+
+  it("strips schema-qualified casts (quoted both segments)", () => {
+    expect(normalizeDbDefault('\'draft\'::"public"."SurveyStatus"')).toEqual({
+      kind: "string",
+      value: "draft",
+    });
+  });
+
+  it("strips schema-qualified casts (bare schema, bare type)", () => {
+    expect(normalizeDbDefault("'x'::pg_catalog.text")).toEqual({ kind: "string", value: "x" });
+  });
+
+  it("strips precision modifier on cast", () => {
+    expect(normalizeDbDefault("now()::timestamp(3)")).toEqual({ kind: "now" });
+    expect(normalizeDbDefault("'2024-01-01'::timestamp(6)")).toEqual({
+      kind: "string",
+      value: "2024-01-01",
+    });
+  });
+
+  it("does not eat literal text inside single quotes that looks like a cast", () => {
+    // `'foo::bar'` — a literal string whose content contains `::` but no
+    // trailing cast suffix. Must round-trip unchanged.
+    expect(normalizeDbDefault("'foo::bar'")).toEqual({ kind: "string", value: "foo::bar" });
+  });
+});
+
+describe("Bug #9.B — Boolean string promotion (type-aware)", () => {
+  it("promotes string literal 'false' on a Boolean field to boolean false", () => {
+    // prisma-ast surfaces `@default(false)` as the string "false" (not the
+    // boolean primitive). The normalizer must promote it on Boolean fields.
+    const f = field("isUnique", "Boolean", [defaultAttr({ literal: "false" })]);
+    expect(normalizePrismaDefault(f)).toEqual({ kind: "boolean", value: false });
+  });
+
+  it("promotes string literal 'true' on a Boolean field to boolean true", () => {
+    const f = field("active", "Boolean", [defaultAttr({ literal: "true" })]);
+    expect(normalizePrismaDefault(f)).toEqual({ kind: "boolean", value: true });
+  });
+
+  it("does NOT promote 'false' on a String field — keeps it as a literal string", () => {
+    // Pathological but legal: `@default("false")` on a String column.
+    // Must remain a string default — DB will report `'false'`, not `false`.
+    const f = field("flag", "String", [defaultAttr({ literal: "false" })]);
+    expect(normalizePrismaDefault(f)).toEqual({ kind: "string", value: "false" });
+  });
+
+  it("still accepts native boolean literal on a Boolean field (unchanged)", () => {
+    // Belt-and-braces: if prisma-ast version changes and starts emitting a
+    // real boolean primitive, behavior must stay correct.
+    const f = field("active", "Boolean", [defaultAttr({ literal: true })]);
+    expect(normalizePrismaDefault(f)).toEqual({ kind: "boolean", value: true });
+  });
+
+  it("R09d.diffDefaults: no finding for `@default(false)` vs DB `false`", () => {
+    const registry = makeRegistry({
+      ContactAttributeKey: [field("isUnique", "Boolean", [defaultAttr({ literal: "false" })])],
+    });
+    const dbColumns: DbColumn[] = [
+      dbCol({
+        tableName: "ContactAttributeKey",
+        columnName: "isUnique",
+        columnDefault: "false",
+      }),
+    ];
+    expect(diffDefaults(registry, dbColumns, opts())).toEqual([]);
+  });
+
+  it("R09d.diffDefaults: real boolean drift still flagged (Prisma true vs DB false)", () => {
+    const registry = makeRegistry({
+      M: [field("flag", "Boolean", [defaultAttr({ literal: "true" })])],
+    });
+    const dbColumns: DbColumn[] = [
+      dbCol({ tableName: "M", columnName: "flag", columnDefault: "false" }),
+    ];
+    const findings = diffDefaults(registry, dbColumns, opts());
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain("M.flag");
+  });
+});
+
+describe("Bug #9.C — JSON whitespace fold in defaultsEqual", () => {
+  it("equates two JSON object strings that differ only in whitespace", () => {
+    expect(
+      defaultsEqual({ kind: "string", value: '{"a": 1}' }, { kind: "string", value: '{"a":1}' }),
+    ).toBe(true);
+    expect(
+      defaultsEqual({ kind: "string", value: '{"a":1}' }, { kind: "string", value: '{ "a" : 1 }' }),
+    ).toBe(true);
+  });
+
+  it("equates Prisma-escaped form against DB-unescaped form", () => {
+    // Prisma `@default("{\"enabled\": false}")` yields `{\"enabled\": false}`
+    // after stripQuotes (internal backslash-quote sequences preserved).
+    // Postgres column_default reports `{"enabled": false}` after cast strip.
+    expect(
+      defaultsEqual(
+        { kind: "string", value: '{\\"enabled\\": false}' },
+        { kind: "string", value: '{"enabled": false}' },
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT equate JSON values with different content", () => {
+    expect(
+      defaultsEqual({ kind: "string", value: '{"a":1}' }, { kind: "string", value: '{"a":2}' }),
+    ).toBe(false);
+    expect(defaultsEqual({ kind: "string", value: "[]" }, { kind: "string", value: "[1,2]" })).toBe(
+      false,
+    );
+  });
+
+  it("does NOT JSON-fold plain string defaults (e.g. 'draft' vs 'pending')", () => {
+    // Quick reject in tryParseJson: only `{` / `[` heads enter the JSON path,
+    // so `'draft'` vs `'pending'` keeps raw string equality semantics.
+    expect(
+      defaultsEqual({ kind: "string", value: "draft" }, { kind: "string", value: "pending" }),
+    ).toBe(false);
+    expect(
+      defaultsEqual({ kind: "string", value: "hello" }, { kind: "string", value: "hello" }),
+    ).toBe(true);
+  });
+
+  it("equates [] (Prisma) with [] (DB) — both as strings", () => {
+    expect(defaultsEqual({ kind: "string", value: "[]" }, { kind: "string", value: "[]" })).toBe(
+      true,
+    );
+  });
+
+  it("equates array-of-objects across whitespace differences", () => {
+    expect(
+      defaultsEqual(
+        { kind: "string", value: '[{"a":1}]' },
+        { kind: "string", value: '[{"a": 1}]' },
+      ),
+    ).toBe(true);
+  });
+
+  it("R09d.diffDefaults: no finding for Prisma '[]' vs DB '[]'::jsonb", () => {
+    const registry = makeRegistry({
+      Survey: [field("blocks", "Json", [defaultAttr({ literal: "[]" })])],
+    });
+    const dbColumns: DbColumn[] = [
+      dbCol({
+        tableName: "Survey",
+        columnName: "blocks",
+        columnDefault: "'[]'::jsonb",
+      }),
+    ];
+    expect(diffDefaults(registry, dbColumns, opts())).toEqual([]);
+  });
+
+  it("R09d.diffDefaults: real JSON drift still flagged ([] vs [1,2])", () => {
+    const registry = makeRegistry({
+      Survey: [field("blocks", "Json", [defaultAttr({ literal: "[]" })])],
+    });
+    const dbColumns: DbColumn[] = [
+      dbCol({
+        tableName: "Survey",
+        columnName: "blocks",
+        columnDefault: "'[1,2]'::jsonb",
+      }),
+    ];
+    const findings = diffDefaults(registry, dbColumns, opts());
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain("Survey.blocks");
+  });
+});
+
+describe("Bug #9.D — keyValue/array Prisma defaults serialize to JSON", () => {
+  it("serializes an array-shaped default to a JSON string the comparer can fold", () => {
+    // Synthesize the keyValue/array AttributeArg shapes prisma-ast can emit
+    // for structural defaults — bypassing the test helper's literal path.
+    const f: FieldInfo = {
+      name: "blocks",
+      type: "Json",
+      isArray: false,
+      isOptional: false,
+      attributes: [
+        {
+          name: "default",
+          args: [{ kind: "array", values: [] }],
+        },
+      ],
+      columnName: "blocks",
+    };
+    expect(normalizePrismaDefault(f)).toEqual({ kind: "string", value: "[]" });
+  });
+
+  it("serializes a keyValue-shaped default to a JSON string", () => {
+    const f: FieldInfo = {
+      name: "data",
+      type: "Json",
+      isArray: false,
+      isOptional: false,
+      attributes: [
+        {
+          name: "default",
+          args: [
+            {
+              kind: "keyValue",
+              key: "enabled",
+              value: { kind: "literal", value: false },
+            },
+          ],
+        },
+      ],
+      columnName: "data",
+    };
+    // JSON.stringify({ enabled: false }) — comparer will JSON-fold this
+    // against the DB side (`'{"enabled": false}'::jsonb` after cast strip).
+    expect(normalizePrismaDefault(f)).toEqual({
+      kind: "string",
+      value: '{"enabled":false}',
+    });
+  });
+
+  it("falls back to <keyValue> raw when the structure contains a function node", () => {
+    const f: FieldInfo = {
+      name: "data",
+      type: "Json",
+      isArray: false,
+      isOptional: false,
+      attributes: [
+        {
+          name: "default",
+          args: [
+            {
+              kind: "keyValue",
+              key: "k",
+              value: { kind: "function", name: "now" },
+            },
+          ],
+        },
+      ],
+      columnName: "data",
+    };
+    expect(normalizePrismaDefault(f)).toEqual({ kind: "raw", value: "<keyValue>" });
+  });
+});
+
 describe("R09d.diffDefaults — integration", () => {
   it("does not flag matched string defaults across Postgres cast normalization", () => {
     const registry = makeRegistry({

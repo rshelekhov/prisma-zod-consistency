@@ -26,7 +26,7 @@
  * `normalizeDbDefault` and a unit test in `default-normalize.test.ts`.
  */
 
-import type { AttributeArg, FieldInfo } from "./prisma-models.js";
+import type { AttributeArg, AttributeArgValue, FieldInfo } from "./prisma-models.js";
 
 /**
  * Normalized representation of a default value, used as the comparison
@@ -57,13 +57,30 @@ export function normalizePrismaDefault(field: FieldInfo): NormalizedDefault {
   if (!attr || attr.args.length === 0) return { kind: "absent" };
 
   const arg = attr.args[0]!;
-  return prismaArgToNormalized(arg);
+  return prismaArgToNormalized(arg, field.type);
 }
 
-function prismaArgToNormalized(arg: AttributeArg): NormalizedDefault {
+/**
+ * @param fieldType  Prisma scalar type as written in the schema (e.g. "Boolean",
+ *                   "Json"). Used to disambiguate string literals on Boolean
+ *                   fields (Bug #9.B — prisma-ast can emit `@default(false)` as
+ *                   the *string* `"false"` rather than the boolean `false`) and
+ *                   to JSON-fold structural defaults on Json fields (Bug #9.D).
+ */
+function prismaArgToNormalized(arg: AttributeArg, fieldType?: string): NormalizedDefault {
   switch (arg.kind) {
     case "literal": {
-      if (typeof arg.value === "string") return { kind: "string", value: arg.value };
+      if (typeof arg.value === "string") {
+        // Bug #9.B — prisma-ast surfaces `@default(true)` / `@default(false)`
+        // as the *string* `"true"` / `"false"` (not the boolean primitive).
+        // Promote them on Boolean-typed fields so they compare against the
+        // DB's bare `true`/`false` correctly. Type-gated to avoid corrupting
+        // a literal `@default("false")` on a String field.
+        if (fieldType === "Boolean" && (arg.value === "true" || arg.value === "false")) {
+          return { kind: "boolean", value: arg.value === "true" };
+        }
+        return { kind: "string", value: arg.value };
+      }
       if (typeof arg.value === "number") return { kind: "number", value: arg.value };
       if (typeof arg.value === "boolean") return { kind: "boolean", value: arg.value };
       return { kind: "raw", value: String(arg.value) };
@@ -79,11 +96,71 @@ function prismaArgToNormalized(arg: AttributeArg): NormalizedDefault {
       return { kind: "raw", value: `${arg.name}()` };
     }
     case "keyValue":
-    case "array":
-      // Defaults like `@default(map: "...")` aren't drift-comparable.
+    case "array": {
+      // Bug #9.D — `@default("[]")` / `@default("{}")` on Json columns is
+      // sometimes emitted by prisma-ast as a structural keyValue/array node
+      // rather than a string literal. Try to round-trip it through JSON so
+      // `defaultsEqual`'s string branch can JSON-fold it against the DB
+      // side (`'[]'::jsonb` etc.). Falls back to the previous
+      // `<keyValue>` placeholder when the structure can't be serialized.
+      const json = tryArgToJson(arg);
+      if (json !== undefined) return { kind: "string", value: JSON.stringify(json) };
       return { kind: "raw", value: "<keyValue>" };
+    }
     case "unknown":
       return { kind: "raw", value: "<unknown>" };
+  }
+}
+
+/**
+ * Best-effort conversion of a Prisma `AttributeArg` / `AttributeArgValue` tree
+ * into a plain JS value suitable for `JSON.stringify`. Used by Bug #9.D to
+ * salvage structural Json defaults that survive `prisma-ast` parsing as
+ * `keyValue` / `array` nodes.
+ *
+ * Returns `undefined` for any node we can't faithfully represent (functions,
+ * identifiers, unknowns) so the caller can fall back to the raw placeholder.
+ */
+function tryArgToJson(arg: AttributeArg): unknown | undefined {
+  switch (arg.kind) {
+    case "literal":
+      return arg.value;
+    case "array": {
+      const out: unknown[] = [];
+      for (const v of arg.values) {
+        const converted = argValueToJson(v);
+        if (converted === undefined) return undefined;
+        out.push(converted);
+      }
+      return out;
+    }
+    case "keyValue": {
+      const inner = argValueToJson(arg.value);
+      if (inner === undefined) return undefined;
+      return { [arg.key]: inner };
+    }
+    default:
+      return undefined;
+  }
+}
+
+function argValueToJson(value: AttributeArgValue): unknown | undefined {
+  switch (value.kind) {
+    case "literal":
+      return value.value;
+    case "array": {
+      const out: unknown[] = [];
+      for (const v of value.values) {
+        const converted = argValueToJson(v);
+        if (converted === undefined) return undefined;
+        out.push(converted);
+      }
+      return out;
+    }
+    case "function":
+    case "identifier":
+    case "unknown":
+      return undefined;
   }
 }
 
@@ -156,14 +233,33 @@ export function normalizeDbDefault(raw: string | null): NormalizedDefault {
 /**
  * Strip a single trailing Postgres cast (`::type`) if present.
  *
- * We don't recurse — Postgres can technically chain casts, but in practice
- * `column_default` is one cast at most. Keeping this conservative avoids
- * accidentally eating literal text.
+ * Recognizes:
+ *   - bare identifiers:        `'draft'::text`, `42::int4`, `now()::timestamp`
+ *   - precision modifiers:     `now()::timestamp(3)`
+ *   - quoted identifiers:      `'user'::"WebhookSource"` (user-defined enums)
+ *   - schema-qualified:        `'draft'::"public"."SurveyStatus"`,
+ *                              `'x'::pg_catalog.text`
+ *
+ * We anchor at end-of-string and don't recurse — Postgres can technically
+ * chain casts, but in practice `column_default` carries one trailing cast at
+ * most. Keeping this conservative avoids accidentally eating literal text
+ * (e.g. an embedded `'foo::bar'` inside single quotes is left alone because
+ * the regex requires the cast at the very end of the input).
  */
 function stripPostgresCasts(s: string): string {
-  // Find the last `::` that's outside of any quotes. Cheap test: walk from
-  // the end and look for `::word` suffix; if found, slice it off.
-  const m = /::[a-zA-Z_][a-zA-Z0-9_ ]*(?:\([^)]*\))?$/.exec(s);
+  // Bug #9.A: support quoted/schema-qualified type names alongside the bare
+  // identifier form. A type segment is one of:
+  //   - quoted, optionally schema-qualified:  `"WebhookSource"`,
+  //                                           `"public"."SurveyStatus"`
+  //   - bare, optionally schema-qualified:    `text`, `pg_catalog.text`
+  //   - bare with multi-word suffix:          `character varying`,
+  //                                           `double precision`,
+  //                                           `time with time zone`
+  // optionally followed by a `(precision)` tail.
+  const m =
+    /::(?:"[^"]+"(?:\.(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*))?|[a-zA-Z_][a-zA-Z0-9_]*(?:\.(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*))?(?:\s+[a-zA-Z_][a-zA-Z0-9_]*)*)(?:\s*\(\s*\d*\s*\))?$/.exec(
+      s,
+    );
   if (!m) return s;
   return s.slice(0, m.index).trim();
 }
@@ -187,8 +283,23 @@ export function defaultsEqual(a: NormalizedDefault, b: NormalizedDefault): boole
   if (a.kind !== b.kind) return false;
 
   switch (a.kind) {
-    case "string":
-      return a.value === (b as Extract<NormalizedDefault, { kind: "string" }>).value;
+    case "string": {
+      const av = a.value;
+      const bv = (b as Extract<NormalizedDefault, { kind: "string" }>).value;
+      if (av === bv) return true;
+      // Bug #9.C — Postgres re-serializes JSON column defaults (collapsing or
+      // inserting whitespace, normalizing key quoting), so what Prisma writes
+      // (`'{"enabled": false}'` after Prisma-side string unescape) and what
+      // the DB reports (`'{"enabled":false}'`) compare unequal as raw strings
+      // even though the JSON value is identical. If both sides parse as JSON,
+      // compare the parsed values structurally.
+      const ajson = tryParseJson(av);
+      const bjson = tryParseJson(bv);
+      if (ajson !== undefined && bjson !== undefined) {
+        return JSON.stringify(ajson) === JSON.stringify(bjson);
+      }
+      return false;
+    }
     case "number":
       return a.value === (b as Extract<NormalizedDefault, { kind: "number" }>).value;
     case "boolean":
@@ -199,6 +310,37 @@ export function defaultsEqual(a: NormalizedDefault, b: NormalizedDefault): boole
       return a.value === (b as Extract<NormalizedDefault, { kind: "raw" }>).value;
     default:
       return false;
+  }
+}
+
+/**
+ * Try to parse a string as JSON. Returns the parsed value, or `undefined`
+ * when the string isn't syntactically valid JSON.
+ *
+ * Used by Bug #9.C JSON-fold in `defaultsEqual`. We additionally collapse a
+ * pair of common Prisma-side escapes (`\"` → `"`, `\\` → `\`) before parsing
+ * because `@default("{\"a\":1}")` arrives here with literal backslash-quote
+ * sequences that `JSON.parse` would otherwise reject.
+ */
+function tryParseJson(s: string): unknown | undefined {
+  // Quick reject: real JSON values start with one of these characters after
+  // any whitespace. This keeps us from JSON-parsing arbitrary string defaults
+  // like `'draft'` or `'2024-01-01'` which would otherwise round-trip as
+  // strings and pretend to be equal.
+  const head = s.trimStart();
+  if (head.length === 0) return undefined;
+  const first = head[0]!;
+  if (!"{[".includes(first)) return undefined;
+
+  try {
+    return JSON.parse(s);
+  } catch {
+    // Try once more with Prisma-side escapes unwrapped.
+    try {
+      return JSON.parse(s.replace(/\\(.)/g, "$1"));
+    } catch {
+      return undefined;
+    }
   }
 }
 
