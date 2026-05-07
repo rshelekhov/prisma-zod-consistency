@@ -57,6 +57,15 @@ export interface RunSummary {
   matchedSchemaCount: number;
   /** Naming prefixes the matcher applied (default `["Z"]`). */
   namingPrefixes: readonly string[];
+  /**
+   * Effective `include` glob patterns the discovery layer used. Surfaced so
+   * the pretty formatter can quote them back at the user when no Zod files
+   * matched — most common monorepo first-run pitfall (Nit #2, 0.9.0).
+   *
+   * Optional for backwards compatibility with existing tests that build
+   * `RunSummary` literals; absent → formatter falls back to "(default)".
+   */
+  includePaths?: readonly string[];
 }
 
 export async function run(options: RunOptions = {}): Promise<RunResult> {
@@ -109,6 +118,12 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
   const ran: RuleId[] = [];
   const skipped: RuleId[] = [];
 
+  // Capture the effective `include` so `maybeBuildSummary` can echo it back
+  // to the user via `RunSummary.includePaths` when no Zod files matched.
+  // We have to reach back to config here because `ctx.sourceFiles` already
+  // resolved the glob into file paths; the patterns themselves don't survive.
+  const includePaths = config.include;
+
   for (const id of requested) {
     const rule = getRule(id);
     if (!rule) {
@@ -136,7 +151,7 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
 
   const filtered = await applySuppressions(findings, config);
 
-  const summary = await maybeBuildSummary(ctx, ran);
+  const summary = await maybeBuildSummary(ctx, ran, includePaths);
 
   return {
     findings: filtered,
@@ -160,6 +175,7 @@ const SUMMARY_RULES: ReadonlySet<RuleId> = new Set<RuleId>(["R01", "R03", "R04"]
 async function maybeBuildSummary(
   ctx: ProjectContext,
   ran: RuleId[],
+  includePaths: readonly string[],
 ): Promise<RunSummary | undefined> {
   if (!ran.some((id) => SUMMARY_RULES.has(id))) return undefined;
 
@@ -177,6 +193,7 @@ async function maybeBuildSummary(
     zodSchemaCount: objectSchemas.length,
     matchedSchemaCount: matches.length,
     namingPrefixes: ctx.namingPrefixes,
+    includePaths,
   };
 }
 
