@@ -273,6 +273,7 @@ describe("R09b.diffTypes — integration", () => {
                 isArray: false,
                 isOptional: false,
                 attributes: [],
+                columnName: "author",
               },
             ],
           },
@@ -310,6 +311,7 @@ function field(
     isArray: p.isArray ?? false,
     isOptional: p.isOptional ?? false,
     attributes: [],
+    columnName: name,
     ...(p.dbAttribute
       ? {
           dbAttribute: {

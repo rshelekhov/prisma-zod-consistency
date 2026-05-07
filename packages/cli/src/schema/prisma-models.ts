@@ -27,6 +27,13 @@ export interface FieldInfo {
   attributes: FieldAttribute[];
   /** `@db.*` modifier when present. */
   dbAttribute?: DbAttribute;
+  /**
+   * Physical DB column name. Honors `@map("name")` and `@map(name: "name")`
+   * (positional + named-arg forms), falls back to `name`. Always populated —
+   * downstream live-DB rules (R09, R09b, R09c, R09d) compare against this so
+   * snake_case-in-DB conventions don't trip false positives.
+   */
+  columnName: string;
 }
 
 export interface FieldAttribute {
@@ -105,11 +112,58 @@ function toModelInfo(block: { name: string; properties: unknown[] }): ModelInfo 
 }
 
 function readMapAttribute(attr: { name: string; args?: unknown[] }): string | undefined {
+  // Block-level `@@map`. Only positional form is meaningful at the model level
+  // (Prisma allows `@@map("name")` or `@@map(name: "name")`), so the same
+  // dual-form reader covers both. Re-use the unified extractor below.
   if (attr.name !== "map") return undefined;
-  for (const raw of attr.args ?? []) {
+  return extractMapNameFromRawArgs(attr.args ?? []);
+}
+
+/**
+ * Read the value of a `@map` / `@@map` attribute from prisma-ast's raw args.
+ *
+ * Handles both syntaxes Prisma accepts:
+ *   - positional:  `@map("created_at")`
+ *   - named-arg:   `@map(name: "created_at")`
+ *
+ * The named-arg form was the proximate cause of bug #7 (formbricks smoke,
+ * 2026-05-07): we only accepted the positional form, so 60+ snake_case
+ * columns on formbricks were treated as orphans by R09/R09c/R09d.
+ *
+ * Operates on the raw shape prisma-ast yields rather than our normalized
+ * `AttributeArg[]` so we can use the same helper from both the field-level
+ * and the model-level readers (the field-level reader normalizes args first;
+ * the model-level reader does not).
+ */
+function extractMapNameFromRawArgs(rawArgs: unknown[]): string | undefined {
+  for (const raw of rawArgs) {
     if (!isObject(raw)) continue;
     const value = (raw as { value?: unknown }).value;
+    // positional form: prisma-ast hands the literal back at .value directly
     if (typeof value === "string") return stripQuotes(value);
+    // named-arg form: .value is a keyValue node `{type:"keyValue", key, value}`
+    if (isObject(value)) {
+      const tagged = value as { type?: unknown; key?: unknown; value?: unknown };
+      if (tagged.type === "keyValue" && tagged.key === "name") {
+        if (typeof tagged.value === "string") return stripQuotes(tagged.value);
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Same intent as the raw-args extractor above, but operates on our
+ * already-normalized `AttributeArg[]`. Used inside `toFieldInfo` to compute
+ * `columnName` from the parsed field attribute list.
+ */
+function extractMapNameFromArgs(args: AttributeArg[]): string | undefined {
+  for (const arg of args) {
+    if (arg.kind === "literal" && typeof arg.value === "string") return arg.value;
+    if (arg.kind === "keyValue" && arg.key === "name") {
+      const v = arg.value;
+      if (v.kind === "literal" && typeof v.value === "string") return v.value;
+    }
   }
   return undefined;
 }
@@ -143,14 +197,29 @@ function toFieldInfo(prop: {
     }
   }
 
+  // Resolve the physical column name once, here, so every consumer downstream
+  // can read `field.columnName` instead of re-implementing the same `@map`
+  // sniff (and getting the named-arg form wrong, as happened pre-0.8.1).
+  const mappedColumn = extractMapColumnFromAttributes(attributes);
+
   return {
     name: prop.name,
     type: stringifyFieldType(prop.fieldType),
     isArray: Boolean(prop.array),
     isOptional: Boolean(prop.optional),
     attributes,
+    columnName: mappedColumn ?? prop.name,
     ...(dbAttribute ? { dbAttribute } : {}),
   };
+}
+
+function extractMapColumnFromAttributes(attrs: FieldAttribute[]): string | undefined {
+  for (const attr of attrs) {
+    if (attr.name !== "map") continue;
+    const v = extractMapNameFromArgs(attr.args);
+    if (v !== undefined) return v;
+  }
+  return undefined;
 }
 
 function toFieldAttribute(node: {
