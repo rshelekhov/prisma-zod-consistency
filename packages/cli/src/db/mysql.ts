@@ -36,6 +36,7 @@
  */
 
 import type { Pool as Mysql2Pool, RowDataPacket } from "mysql2/promise";
+import { sanitizePrismaUrl } from "./sanitize-url.js";
 import type {
   DbColumn,
   DbConnectOptions,
@@ -98,8 +99,11 @@ interface FkRow {
 
 export async function snapshotMysql(opts: DbConnectOptions): Promise<DbSnapshot> {
   const mysql = await loadDriver();
-  const pool = mysql.createPool({ uri: opts.url, connectionLimit: 1 });
-  const schema = opts.schema ?? deriveSchemaFromUrl(opts.url);
+  // Strip Prisma-only URL params (`?connection_limit=`, `?pool_timeout=`, …)
+  // before handing the URI to mysql2; see sanitize-url.ts for rationale.
+  const { url: cleanUrl } = sanitizePrismaUrl(opts.url, "mysql");
+  const pool = mysql.createPool({ uri: cleanUrl, connectionLimit: 1 });
+  const schema = opts.schema ?? deriveSchemaFromUrl(cleanUrl);
   if (!schema) {
     await pool.end();
     throw new Error(

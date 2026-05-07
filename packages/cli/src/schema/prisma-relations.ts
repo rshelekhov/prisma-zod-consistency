@@ -177,12 +177,8 @@ export function prismaActionToCanonical(keyword: string): ForeignKeyAction {
 
 function columnNameOnModel(model: ModelInfo, fieldName: string): string {
   const field = model.fields.find((f) => f.name === fieldName);
-  if (!field) return fieldName; // best-effort — Prisma should reject this at validate time
-  for (const attr of field.attributes) {
-    if (attr.name === "map" && attr.args[0]?.kind === "literal") {
-      const v = attr.args[0].value;
-      if (typeof v === "string") return v;
-    }
-  }
-  return fieldName;
+  // Best-effort fallback — Prisma should reject the missing field at validate time.
+  // When the field exists, `columnName` is always populated by the schema loader
+  // (honours both `@map("x")` and `@map(name: "x")` forms — see prisma-models.ts).
+  return field?.columnName ?? fieldName;
 }

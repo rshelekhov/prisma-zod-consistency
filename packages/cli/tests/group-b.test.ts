@@ -236,6 +236,7 @@ function makeRegistry(
         isArray: false,
         isOptional: info.isOptional ?? false,
         attributes: [],
+        columnName: fname,
       })),
     });
   }

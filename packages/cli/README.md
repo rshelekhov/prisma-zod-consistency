@@ -27,13 +27,20 @@ cd packages/cli && pnpm link --global
 
 The static rules (R01–R05) need no extra dependencies. To run the live-DB rules (R07/R08/R09 with `--db`), install the driver for your provider — they are declared as optional peer dependencies:
 
-| Provider              | Install                                      |
-|-----------------------|----------------------------------------------|
-| PostgreSQL            | `pnpm add -D postgres`                       |
-| MySQL / MariaDB       | `pnpm add -D mysql2`                         |
-| SQLite                | `pnpm add -D better-sqlite3`                 |
+| Provider              | Install                                                       |
+|-----------------------|---------------------------------------------------------------|
+| PostgreSQL            | `pnpm add -D postgres` (or `npm i -D postgres`)               |
+| MySQL / MariaDB       | `pnpm add -D mysql2` (or `npm i -D mysql2`)                   |
+| SQLite                | `pnpm add -D better-sqlite3` (or `npm i -D better-sqlite3`)   |
 
-If you don't run `--db` you don't need any of them. Running `--db` without the matching driver fails with an error that names the install command.
+If you don't run `--db` you don't need any of them. Running `--db` without the matching driver fails with an error that names the install command — re-run the line from the table above and you're set.
+
+#### `DATABASE_URL` accepts the standard Prisma format
+
+Pass the same connection string you put in `.env` for Prisma. Prisma-specific query params (`?schema=public`, `?connection_limit=`, `?pool_timeout=`, `?pgbouncer=`, `?statement_cache_size=`, plus the Prisma SSL aliases `sslcert/sslidentity/sslpassword/sslaccept`) are stripped automatically before being passed to the underlying driver — so you don't have to rewrite the URL just for the live-DB checks.
+
+For PostgreSQL, `?schema=<name>` is honoured: it sets the schema introspected by R09/R09b/R09c/R09d, mirroring Prisma's behaviour. (Pre-0.8.1 the URL was forwarded verbatim and `?schema=public` would cause `unrecognized configuration parameter "schema"`; fixed in 0.8.1.)
+
 
 The package installs two equivalent binaries:
 

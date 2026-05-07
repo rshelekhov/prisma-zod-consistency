@@ -90,7 +90,7 @@ export function diffPrismaVsDb(
 
     for (const field of model.fields) {
       if (isRelationField(field, registry)) continue;
-      const dbColName = resolveColumnName(field);
+      const dbColName = field.columnName;
       if (ignoreColumns.some((re) => re.test(dbColName))) continue;
 
       const dbCol = dbByCol.get(dbColName);
@@ -143,17 +143,6 @@ export function diffPrismaVsDb(
   }
 
   return findings;
-}
-
-function resolveColumnName(field: FieldInfo): string {
-  // @map("column_name") on the field maps to a different DB column name.
-  for (const attr of field.attributes) {
-    if (attr.name === "map" && attr.args[0]) {
-      const arg = attr.args[0];
-      if (arg.kind === "literal" && typeof arg.value === "string") return arg.value;
-    }
-  }
-  return field.name;
 }
 
 function isRelationField(field: FieldInfo, registry: PrismaModelRegistry): boolean {

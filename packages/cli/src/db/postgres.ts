@@ -6,10 +6,11 @@
  * fixture data instead of a live Postgres connection.
  */
 
+import type postgres from "postgres";
 // `postgres` is an optional peer; we pull it in dynamically inside snapshotPostgres.
 // `import type` is a pure type reference — tsc strips it from emit, so it does NOT
 // pull `postgres` at runtime even when the dependency is missing.
-import type postgres from "postgres";
+import { sanitizePrismaUrl } from "./sanitize-url.js";
 import type {
   DbColumn,
   DbConnectOptions,
@@ -29,13 +30,32 @@ const DEFAULT_EXCLUDE_TABLES = ["_prisma_migrations"];
  */
 export async function snapshotPostgres(opts: DbConnectOptions): Promise<DbSnapshot> {
   // Dynamic import: keeps `postgres` an optional peer. If it's missing we
-  // surface an actionable error in `db/index.ts` rather than crashing here.
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(opts.url, {
+  // surface an actionable error here (mirrors the mysql/sqlite adapter wrappers)
+  // rather than letting the bare `Cannot find package 'postgres'` reach the user.
+  // The original `await import("postgres")` works at runtime but throws a bare
+  // module-not-found error if the optional peer is missing. Wrap with the same
+  // actionable hint the mysql/sqlite adapters give. We keep the
+  // `default`-destructuring shape to match the previous TS inference (postgres
+  // is published with `export = ...`, esModuleInterop synthesizes `.default`).
+  const postgresModule = await import("postgres").catch((err) => {
+    throw new Error(
+      `Group B rules need the 'postgres' package to introspect a PostgreSQL database, but it is not installed. Install it as a dev dependency: \`pnpm add -D postgres\` (or \`npm i -D postgres\`). Original error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
+  const { default: postgres } = postgresModule;
+  // Strip Prisma-only URL params (`?schema=`, `?connection_limit=`, …) before
+  // handing the URL to postgres.js. See sanitize-url.ts for the full rationale.
+  const { url: cleanUrl, searchPath } = sanitizePrismaUrl(opts.url, "postgresql");
+  const sql = postgres(cleanUrl, {
     onnotice: () => {}, // suppress NOTICE noise
     max: 1,
   });
-  const schema = opts.schema ?? "public";
+  // Effective schema in priority order:
+  //   explicit opts.schema  >  ?schema= from DATABASE_URL  >  default "public"
+  // Our subsequent queries are all fully-qualified via `WHERE n.nspname = ${schema}`,
+  // so we do not need to issue a SET search_path round-trip — the value flows
+  // directly into the parameterized predicates below.
+  const schema = opts.schema ?? searchPath ?? "public";
   const excludeTables = new Set([...DEFAULT_EXCLUDE_TABLES, ...(opts.excludeTables ?? [])]);
 
   try {

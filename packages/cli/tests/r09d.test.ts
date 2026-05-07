@@ -229,7 +229,28 @@ function field(name: string, type: string, attributes: FieldInfo["attributes"]):
     isArray: false,
     isOptional: false,
     attributes,
+    columnName: extractMapColumn(attributes) ?? name,
   };
+}
+
+/**
+ * Mirror the schema-loader's @map extraction so test fields constructed with a
+ * `defaultAttr({...})` and a co-located `@map(...)` attribute report the right
+ * `columnName`. Tests for bug #7 rely on this to assemble fixture fields with
+ * mapped column names without re-implementing the parser.
+ */
+function extractMapColumn(attrs: FieldInfo["attributes"]): string | undefined {
+  for (const attr of attrs) {
+    if (attr.name !== "map") continue;
+    for (const arg of attr.args) {
+      if (arg.kind === "literal" && typeof arg.value === "string") return arg.value;
+      if (arg.kind === "keyValue" && arg.key === "name") {
+        const v = arg.value;
+        if (v.kind === "literal" && typeof v.value === "string") return v.value;
+      }
+    }
+  }
+  return undefined;
 }
 
 function defaultAttr(p: {

@@ -86,7 +86,7 @@ export function diffTypes(
 
     for (const field of model.fields) {
       if (isRelationField(field, registry)) continue;
-      const colName = resolveColumnName(field);
+      const colName = field.columnName;
       if (ignoreColumns.some((re) => re.test(colName))) continue;
 
       const dbCol = colsForTable.get(colName);
@@ -134,16 +134,6 @@ function describeDbType(dbCol: DbColumn): string {
     return `${base}(${dbCol.characterMaximumLength})`;
   }
   return base;
-}
-
-function resolveColumnName(field: FieldInfo): string {
-  for (const attr of field.attributes) {
-    if (attr.name === "map" && attr.args[0]) {
-      const arg = attr.args[0];
-      if (arg.kind === "literal" && typeof arg.value === "string") return arg.value;
-    }
-  }
-  return field.name;
 }
 
 function isRelationField(field: FieldInfo, registry: PrismaModelRegistry): boolean {
