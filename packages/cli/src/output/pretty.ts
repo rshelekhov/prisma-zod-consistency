@@ -44,16 +44,41 @@ export function formatPretty(
  * UX bug #5 (0.8.0): when the run produced no findings, the user previously
  * had no way to tell "tool found nothing" from "tool didn't actually look at
  * what I expected". The summary disambiguates.
+ *
+ * Nit #2 (0.9.0): extends the disambiguation with a separate branch for
+ * `zodSchemaCount === 0` — typical first-run-on-monorepo failure where the
+ * default `include = ["src/**\/*.ts"]` finds nothing because the project
+ * keeps its TS sources under `apps/<app>/...` or `packages/<pkg>/...`.
+ * Without this branch the run prints "✓ no findings (1 Prisma model, 0 Zod
+ * schemas, 0 matched)" — green, with exit=0 — and the user thinks the
+ * linter passed when really it didn't run anything.
  */
 function formatZeroFindings(summary: RunSummary | undefined): string {
   if (!summary) {
     return pc.green("✓ no findings");
   }
-  const { prismaModelCount, zodSchemaCount, matchedSchemaCount, namingPrefixes } = summary;
+  const { prismaModelCount, zodSchemaCount, matchedSchemaCount, namingPrefixes, includePaths } =
+    summary;
   const detail =
     `${prismaModelCount} Prisma model${plural(prismaModelCount)}, ` +
     `${zodSchemaCount} Zod schema${plural(zodSchemaCount)}, ` +
     `${matchedSchemaCount} matched after name normalization`;
+
+  if (zodSchemaCount === 0 && prismaModelCount > 0) {
+    const includeShown =
+      includePaths && includePaths.length > 0
+        ? includePaths.map((p) => `"${p}"`).join(", ")
+        : '(default: "src/**/*.ts","src/**/*.tsx")';
+    return [
+      pc.yellow(`⚠ no Zod schemas matched at include paths: [${includeShown}].`),
+      pc.yellow(
+        `  ${prismaModelCount} Prisma model${plural(prismaModelCount)} loaded, but no Zod schemas were scanned — R01/R03/R04 had nothing to compare.`,
+      ),
+      pc.dim("  If you are in a monorepo, extend `include` in .prismazodrc.json, e.g.:"),
+      pc.dim('    "include": ["apps/**/*.ts","packages/**/*.ts"]'),
+      pc.red("✗ 0 schemas matched (lint did not run)"),
+    ].join("\n");
+  }
 
   if (zodSchemaCount > 0 && matchedSchemaCount === 0) {
     const prefixesShown = namingPrefixes.length > 0 ? namingPrefixes.join('", "') : "(none)";

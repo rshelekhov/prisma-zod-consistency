@@ -73,6 +73,22 @@ program
         process.stdout.write(`${out}\n`);
 
         const hasErrors = result.findings.some((f) => f.severity === "error");
+
+        // Nit #2 (0.9.0): "lint did not run" leaky bucket. When R01/R03/R04
+        // were requested but the include glob captured zero Zod schemas in a
+        // project that does have Prisma models, the run is technically clean
+        // but only because nothing got compared. Fail with exit=2 (bad
+        // invocation) so CI surfaces the misconfig instead of merging green.
+        // To opt out, disable the static rules in config:
+        //   { "rules": { "R01": { "severity": "off" }, ... } }
+        const lintDidNotRun =
+          result.summary !== undefined &&
+          result.summary.zodSchemaCount === 0 &&
+          result.summary.prismaModelCount > 0;
+
+        if (lintDidNotRun) {
+          process.exit(2);
+        }
         process.exit(hasErrors ? 1 : 0);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

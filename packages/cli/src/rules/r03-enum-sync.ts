@@ -244,6 +244,7 @@ function checkFieldEnumDrift(
           schema.file,
           zodField.line,
           options,
+          { model: schema.name, field: zodField.name },
         );
       }
       return [];
@@ -277,6 +278,11 @@ function checkFieldEnumDrift(
   }
 
   // baseType === "enum": compare values.
+  // Nit #4 (0.9.0): pass the field's parent schema as `scope.model` and the
+  // field name as `scope.field`. Pre-0.9.0 we passed `zodField.name` as
+  // model, which surfaced as `scope: { model: "role" }` in JSON consumers —
+  // misleading because the literal lives inside `UserSchema.role`, not in a
+  // schema actually called `role`.
   const findings = diffEnumValues(
     zodField.name,
     zodField.enumValues ?? [],
@@ -285,6 +291,7 @@ function checkFieldEnumDrift(
     schema.file,
     zodField.line,
     options,
+    { model: schema.name, field: zodField.name },
   );
 
   if (preferNativeEnum && findings.length === 0) {
@@ -309,6 +316,14 @@ function diffEnumValues(
   file: string,
   line: number,
   options: RuleOptions,
+  /**
+   * Nit #4 (0.9.0): callers attach the right scope. Pass 1 (top-level enum
+   * schemas) leaves it undefined → defaults to `{ model: zodName }` which
+   * matches pre-0.9.0 output. Pass 2 (field-level inline `z.enum([...])`)
+   * passes `{ model: parentSchemaName, field: fieldName }` so JSON consumers
+   * see the parent z.object schema, not the bare field name.
+   */
+  scope?: { model: string; field?: string },
 ): Finding[] {
   const inPrisma = new Set(prismaValues);
   const inZod = new Set(zodValues);
@@ -333,6 +348,8 @@ function diffEnumValues(
     parts.push(`extra in Zod: ${extraInZod.join(", ")}`);
   }
 
+  const effectiveScope = scope ?? { model: zodName };
+
   return [
     {
       ruleId: "R03",
@@ -340,7 +357,7 @@ function diffEnumValues(
       message: `Enum \`${zodName}\` does not match Prisma enum \`${prismaEnumName}\` — ${parts.join("; ")}.`,
       location: { file, line },
       suggestion: `Sync values: Prisma enum \`${prismaEnumName}\` is { ${prismaValues.join(", ")} }.`,
-      scope: { model: zodName },
+      scope: effectiveScope,
     },
   ];
 }
