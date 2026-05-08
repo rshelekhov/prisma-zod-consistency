@@ -1,12 +1,13 @@
 {
   "name": "@prisma-zod-consistency/skill-claude-code",
-  "version": "0.0.0",
+  "version": "0.10.0",
   "private": true,
-  "description": "Claude Code skill bundle for prisma-zod-consistency.",
+  "description": "Claude Code plugin for prisma-zod-consistency.",
   "license": "MIT",
   "files": [
-    "SKILL.md",
-    "plugin.json"
+    ".claude-plugin/plugin.json",
+    "skills/prisma-zod-consistency/SKILL.md",
+    "README.md"
   ],
   "scripts": {
     "build": "echo 'no build (markdown bundle)'",
