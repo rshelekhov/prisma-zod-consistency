@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "prisma-zod-consistency",
+  "description": "Static + live-DB linter for Prisma schemas, Zod schemas, and TypeScript code — finds drift before prod does.",
+  "owner": {
+    "name": "Roman Shelekhov",
+    "email": "shelekhoff@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "prisma-zod-consistency",
+      "description": "Audit Prisma + Zod + TypeScript projects for cross-layer drift between the database schema, the Zod validation layer, and how they're used in route handlers. Wraps the deterministic prisma-zod-consistency CLI with contextual analysis, recommended fixes, and optional auto-fix.",
+      "author": {
+        "name": "Roman Shelekhov",
+        "email": "shelekhoff@gmail.com"
+      },
+      "category": "development",
+      "source": "./packages/skill-claude-code",
+      "homepage": "https://github.com/rshelekhov/prisma-zod-consistency"
+    }
+  ]
+}

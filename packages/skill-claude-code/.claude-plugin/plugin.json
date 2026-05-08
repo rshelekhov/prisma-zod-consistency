@@ -1,0 +1,8 @@
+{
+  "name": "prisma-zod-consistency",
+  "description": "Audit Prisma + Zod + TypeScript projects for cross-layer drift. Wraps the deterministic prisma-zod-consistency CLI with contextual analysis, recommendations, and optional auto-fix.",
+  "author": {
+    "name": "Roman Shelekhov",
+    "email": "shelekhoff@gmail.com"
+  }
+}
