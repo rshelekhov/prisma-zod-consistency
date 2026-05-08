@@ -1,6 +1,6 @@
 {
   "name": "prisma-zod-consistency",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "CLI for prisma-zod-consistency — deterministic static analysis for Prisma + Zod + TypeScript projects. Catches drift between schema.prisma, Zod schemas, and TypeScript code.",
   "license": "MIT",
   "author": "Roman Shelekhov",
