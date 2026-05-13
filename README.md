@@ -2,8 +2,35 @@
 
 > Static + live-DB linter for Prisma schemas, Zod schemas, and your TypeScript code — finds drift before prod does.
 
-<!-- GIF placeholder — to be replaced in next pre-launch pass with a 30s screencast -->
-<!-- ![demo](docs/assets/demo.gif) -->
+```text
+$ npx prisma-zod-consistency
+info: live-DB rules skipped (pass --db to enable): R07, R08, R09, R09b, R09c, R09d
+
+[R01] (2)
+  error src/zod/links.ts:4
+    Field `shortLink` is `@db.VarChar(400)` in Prisma; `LinkSchema` has no `.max()` to enforce that limit.
+    → Add `.max(400)` to `shortLink`.
+  error src/zod/users.ts:4
+    Field `email` is `@db.VarChar(255)` in Prisma; `UserSchema` has no `.max()` to enforce that limit.
+    → Add `.max(255)` to `email`.
+
+[R02] (1)
+  warn prisma/schema.prisma:20
+    Relation Link.user is missing explicit onDelete.
+    → Add `onDelete: <action>` to the @relation arguments.
+
+[R03] (1)
+  error src/zod/users.ts:5
+    Enum `role` does not match Prisma enum `Role` — missing in Zod: ADMIN, USER; extra in Zod: admin, user.
+    → Sync values: Prisma enum `Role` is { ADMIN, USER }.
+
+[R04] (1)
+  error src/zod/users.ts:6
+    Field `bio` is optional in Prisma (`String?`) but `UserSchema` requires a non-null, non-undefined value.
+    → Add `.nullable()` (for DB reads) or `.optional()` (to allow omitted keys).
+
+4 errors, 1 warning, 0 info
+```
 
 ## Quick start
 
