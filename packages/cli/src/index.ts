@@ -10,7 +10,7 @@ import { formatDiff } from "./fix/diff.js";
 import { formatJson } from "./output/json.js";
 import { formatPretty } from "./output/pretty.js";
 import { formatSarif } from "./output/sarif.js";
-import { getRule } from "./rules/index.js";
+import { allRules, getRule } from "./rules/index.js";
 import { type RunResult, run } from "./runner.js";
 import type { Rule, RuleId } from "./types.js";
 import { VERSION } from "./version.js";
@@ -63,14 +63,41 @@ program
           process.stderr.write(`warning: ${w}\n`);
         }
 
-        if (result.skippedRules.length > 0 && opts.output === "pretty") {
+        // Split skipped rules by reason (0.10.1, fixes 0.9.0 follow-up (a)):
+        // - `unknown` is a CI error (typo in --rules), gates with exit=2.
+        // - `needs-db` is the normal default state, surfaced as info so
+        //   the user knows the opt-in exists.
+        // - `disabled` is silent: the user turned it off themselves.
+        const unknownRules = result.skippedRules
+          .filter((s) => s.reason === "unknown")
+          .map((s) => s.id);
+        const needsDbRules = result.skippedRules
+          .filter((s) => s.reason === "needs-db")
+          .map((s) => s.id);
+
+        if (unknownRules.length > 0) {
+          const known = allRules()
+            .map((r) => r.id)
+            .join(", ");
           process.stderr.write(
-            `note: skipped unregistered or unsatisfied rule(s): ${result.skippedRules.join(", ")}\n`,
+            `prisma-zod-consistency: unknown rule(s): ${unknownRules.join(", ")}\n`,
+          );
+          process.stderr.write(`  available: ${known}\n`);
+        }
+        if (needsDbRules.length > 0 && opts.output === "pretty") {
+          process.stderr.write(
+            `info: live-DB rules skipped (pass --db to enable): ${needsDbRules.join(", ")}\n`,
           );
         }
 
         const out = renderOutput(opts.output, result);
         process.stdout.write(`${out}\n`);
+
+        // Unknown rule ids are a bad invocation — gate with exit=2 so
+        // CI catches a typo in `--rules` instead of passing silently.
+        if (unknownRules.length > 0) {
+          process.exit(2);
+        }
 
         const hasErrors = result.findings.some((f) => f.severity === "error");
 

@@ -25,10 +25,38 @@ export interface RunOptions {
   databaseUrl?: string;
 }
 
+/**
+ * Why a requested rule wasn't run. The CLI surfaces these three reasons
+ * differently to avoid the 0.9.0 nit where typos and "needs --db" looked
+ * identical in stderr ("note: skipped unregistered or unsatisfied …"):
+ *
+ * - `"unknown"` — id isn't in the registry. Most likely a typo or a rule
+ *   from a future version. CLI should fail with exit=2 (bad invocation)
+ *   so a `--rules R99` in CI doesn't pass silently.
+ * - `"needs-db"` — id is a live-DB rule (R07-R09d), but `--db` wasn't
+ *   passed. Normal case for the static default run; CLI surfaces it as
+ *   `info:` so the user knows what they could opt into.
+ * - `"disabled"` — id is in the registry but the user explicitly set
+ *   `severity: "off"` in `.prismazodrc.json`. CLI stays silent; the
+ *   user already knows.
+ */
+export type SkippedRuleReason = "unknown" | "needs-db" | "disabled";
+
+export interface SkippedRule {
+  id: string;
+  reason: SkippedRuleReason;
+}
+
 export interface RunResult {
   findings: Finding[];
   ranRules: RuleId[];
-  skippedRules: RuleId[];
+  /**
+   * Rules that were requested but didn't run, with the reason for each.
+   * Shape changed in 0.10.1: was `RuleId[]`, now structured so the CLI
+   * can give the user actionable feedback per reason. Pre-1.0 breaking
+   * change in the runner API surface (CLI is the only known consumer).
+   */
+  skippedRules: SkippedRule[];
   /** Project root used by output formatters that need to relativize paths (SARIF). */
   rootDir: string;
   /**
@@ -116,7 +144,7 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
 
   const findings: Finding[] = [];
   const ran: RuleId[] = [];
-  const skipped: RuleId[] = [];
+  const skipped: SkippedRule[] = [];
 
   // Capture the effective `include` so `maybeBuildSummary` can echo it back
   // to the user via `RunSummary.includePaths` when no Zod files matched.
@@ -127,17 +155,18 @@ export async function run(options: RunOptions = {}): Promise<RunResult> {
   for (const id of requested) {
     const rule = getRule(id);
     if (!rule) {
-      skipped.push(id);
+      skipped.push({ id, reason: "unknown" });
       continue;
     }
     const ruleConfig = config.rules[id] ?? {};
     if (ruleConfig.severity === "off") {
-      skipped.push(id);
+      skipped.push({ id, reason: "disabled" });
       continue;
     }
     if (DB_RULES.has(id) && !ctx.db) {
-      // Silently skip DB rules when no snapshot is available.
-      skipped.push(id);
+      // Live-DB rules without --db: surfaced as `needs-db` so the CLI can
+      // tell the user about the opt-in instead of conflating it with typos.
+      skipped.push({ id, reason: "needs-db" });
       continue;
     }
     const severity = resolveSeverity(rule, ruleConfig);
