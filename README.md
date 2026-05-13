@@ -23,6 +23,17 @@ In a monorepo, point it at the schema and your TS sources:
 }
 ```
 
+## Use as a Claude Code skill
+
+Available in the official [Claude Code Plugin Directory](https://claude.com/plugins). Install from inside Claude Code:
+
+```
+/plugin marketplace add rshelekhov/prisma-zod-consistency
+/plugin install prisma-zod-consistency
+```
+
+Then in any Prisma + Zod project say "check Prisma/Zod consistency" (or `проверь согласованность`) — the skill auto-engages, runs the CLI under the hood, and returns a contextual report with suggested fixes. Adds the R06 missing-index review and R10/R11 pattern checks that the CLI intentionally doesn't ship.
+
 ## What it catches
 
 Real drift cases from open-source TypeScript repos.
@@ -64,12 +75,13 @@ role: z.enum(["admin", "user"])  // case mismatch
 
 Findings appear in the **Security** tab of the repo and as inline annotations on PRs. Exit code 1 if any `error`-severity finding, exit 2 on misconfig (missing schema, no Zod files matched). See [`packages/cli/README.md`](packages/cli/README.md) for the full flag reference, suppression comments, `--db` configuration, and the auto-fix subcommand.
 
-## CLI + skill
+## CLI + skill — two surfaces, one source of truth
 
-The same rule definitions in `packages/checks` ship as two surfaces:
+The same rule definitions in `packages/checks` ship as:
 
-- **CLI** (`prisma-zod-consistency` on npm) — deterministic, low-noise, designed to gate CI.
-- **Skill** for Claude Code and Codex — adds context-aware analysis: reads service-layer code, suggests fixes, can reach a live DB via Postgres MCP. Catches what static analysis can't.
+- **CLI** ([`prisma-zod-consistency` on npm](https://www.npmjs.com/package/prisma-zod-consistency)) — deterministic, low-noise, designed to gate CI.
+- **Claude Code skill** ([Plugin Directory](https://claude.com/plugins)) — adds context-aware analysis: reads service-layer code, suggests fixes, runs the R06 missing-index review.
+- **Codex agent** (`packages/skill-codex/AGENTS.md`) — same playbook for the Codex CLI.
 
 ## Status
 
